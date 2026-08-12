@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { BankError, loadBank, parseExercise, totalUnits } from "./schema.js";
+import { BankError, loadBank, parseExercise, totalUnits, type RecallExercise } from "./schema.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 
@@ -95,14 +95,21 @@ describe("recall kind", () => {
     reveal: "P(no collision) drops below 0.5 at n=23.",
   };
   it("accepts recall with reveal optional", () => {
-    expect(parseExercise(JSON.stringify(recall)).kind).toBe("recall");
+    const parsed = parseExercise(JSON.stringify(recall)) as RecallExercise;
+    expect(parsed.kind).toBe("recall");
+    // z.object strips unknown keys, so this is what proves reveal is in the schema at all.
+    expect(parsed.reveal).toBe("P(no collision) drops below 0.5 at n=23.");
     const { reveal: _reveal, ...noReveal } = recall;
-    expect(parseExercise(JSON.stringify(noReveal)).kind).toBe("recall");
+    const parsedNoReveal = parseExercise(JSON.stringify(noReveal)) as RecallExercise;
+    expect(parsedNoReveal.kind).toBe("recall");
+    expect(parsedNoReveal.reveal).toBeUndefined();
   });
-  it("counts one unit and rejects concrete languages + empty answers", () => {
+  it("counts one unit and rejects concrete languages, empty answers, and blank strings", () => {
     expect(totalUnits(parseExercise(JSON.stringify(recall)))).toBe(1);
     expect(() => parseExercise(JSON.stringify({ ...recall, language: "java" }))).toThrow(BankError);
     expect(() => parseExercise(JSON.stringify({ ...recall, acceptedAnswers: [] }))).toThrow(BankError);
+    expect(() => parseExercise(JSON.stringify({ ...recall, acceptedAnswers: [""] }))).toThrow(BankError);
+    expect(() => parseExercise(JSON.stringify({ ...recall, reveal: "" }))).toThrow(BankError);
   });
 });
 
