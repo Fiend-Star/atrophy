@@ -55,6 +55,20 @@ describe("parseExercise", () => {
   ])("rejects %s", (_name, bad) => {
     expect(() => parseExercise(JSON.stringify(bad))).toThrow(BankError);
   });
+
+  it("accepts java code, predict-output, and cloze exercises", () => {
+    const javaWrite = {
+      ...valid,
+      id: "sr-java-001",
+      language: "java",
+      starterCode: "public class Solution { static int f(int x) { throw new UnsupportedOperationException(); } }",
+    };
+    expect(parseExercise(JSON.stringify(javaWrite)).language).toBe("java");
+    const predict = { id: "cr-java-001", kind: "predict-output", axis: "code-reading", language: "java", tier: 1, title: "t", prompt: "p", softTimeLimitSeconds: 120, snippet: "public class Main { public static void main(String[] a) { System.out.println(1); } }" };
+    expect(parseExercise(JSON.stringify(predict)).language).toBe("java");
+    const cloze = { id: "api-java-001", kind: "cloze", axis: "api-memory", language: "java", tier: 1, title: "t", prompt: "p", softTimeLimitSeconds: 60, snippet: "int n = list.____();", acceptedAnswers: ["size"] };
+    expect(parseExercise(JSON.stringify(cloze)).language).toBe("java");
+  });
 });
 
 describe("totalUnits", () => {

@@ -10,7 +10,7 @@ export const AXES = [
   "decomposition",
 ] as const;
 
-export const LANGUAGES = ["python", "javascript"] as const;
+export const LANGUAGES = ["python", "javascript", "java"] as const;
 
 export const testCaseSchema = z.object({
   /** Arguments passed to the exercise function, JSON-encodable. */
