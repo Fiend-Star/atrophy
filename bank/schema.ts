@@ -72,6 +72,15 @@ export const exerciseSchema = z.discriminatedUnion("kind", [
     language: z.literal("any"),
     rubric: z.array(z.string().min(1)).min(1),
   }),
+  /** Concept/puzzle recall: short answer, numeric-tolerant match (1/4 == 0.25 == 25%). */
+  z.object({
+    kind: z.literal("recall"),
+    ...baseFields,
+    language: z.literal("any"),
+    acceptedAnswers: z.array(z.string().min(1)).min(1),
+    /** Derivation shown after grading; never graded. */
+    reveal: z.string().min(1).optional(),
+  }),
 ]);
 
 export type Exercise = z.infer<typeof exerciseSchema>;
@@ -79,6 +88,7 @@ export type CodeExercise = Extract<Exercise, { kind: "write" | "fix" }>;
 export type PredictExercise = Extract<Exercise, { kind: "predict-output" }>;
 export type ClozeExercise = Extract<Exercise, { kind: "cloze" }>;
 export type OutlineExercise = Extract<Exercise, { kind: "outline" }>;
+export type RecallExercise = Extract<Exercise, { kind: "recall" }>;
 export type Axis = (typeof AXES)[number];
 export type Language = (typeof LANGUAGES)[number];
 
@@ -97,6 +107,8 @@ export function totalUnits(ex: Exercise): number {
       return 1;
     case "outline":
       return ex.rubric.length;
+    case "recall":
+      return 1;
   }
 }
 

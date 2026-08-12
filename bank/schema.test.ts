@@ -81,6 +81,31 @@ describe("totalUnits", () => {
   });
 });
 
+describe("recall kind", () => {
+  const recall = {
+    id: "rec-any-001",
+    kind: "recall",
+    axis: "decomposition",
+    language: "any",
+    tier: 1,
+    title: "Birthday paradox",
+    prompt: "How many people for a >50% shared-birthday chance?",
+    softTimeLimitSeconds: 120,
+    acceptedAnswers: ["23"],
+    reveal: "P(no collision) drops below 0.5 at n=23.",
+  };
+  it("accepts recall with reveal optional", () => {
+    expect(parseExercise(JSON.stringify(recall)).kind).toBe("recall");
+    const { reveal: _reveal, ...noReveal } = recall;
+    expect(parseExercise(JSON.stringify(noReveal)).kind).toBe("recall");
+  });
+  it("counts one unit and rejects concrete languages + empty answers", () => {
+    expect(totalUnits(parseExercise(JSON.stringify(recall)))).toBe(1);
+    expect(() => parseExercise(JSON.stringify({ ...recall, language: "java" }))).toThrow(BankError);
+    expect(() => parseExercise(JSON.stringify({ ...recall, acceptedAnswers: [] }))).toThrow(BankError);
+  });
+});
+
 describe("loadBank", () => {
   it("loads every shipped seed exercise (bank stays valid)", () => {
     const bank = loadBank(join(here, "exercises"));
