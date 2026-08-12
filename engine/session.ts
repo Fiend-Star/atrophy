@@ -53,6 +53,8 @@ export async function runDrill(
       return clozeDrill(ex, solutionOverride);
     case "outline":
       return outlineDrill(ex, solutionOverride);
+    case "recall":
+      throw new Error("recall drills are not implemented yet (lands in a later task)");
   }
 }
 
