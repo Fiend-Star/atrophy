@@ -2,13 +2,16 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { grade, gradePrediction, solutionFileName } from "../../engine/grader.js";
+import { grade, gradeCloze, gradePrediction, solutionFileName } from "../../engine/grader.js";
 import { JAVA_COMPILE_TIMEOUT_MS, hasJdk, javacCommand } from "../../engine/javatool.js";
 import { run } from "../../engine/runner.js";
 import { isCode, isHarness, type CodeExercise, type PredictExercise } from "../schema.js";
 import { allGenerators } from "./index.js";
 
 const SEEDS = ["a1b2c3", "000000", "ffffff"];
+
+/** A wider spread, for families whose variant is itself an rng draw from a table. */
+const SEED_SPREAD = Array.from({ length: 24 }, (_, i) => (i * 0x1111).toString(16).padStart(6, "0"));
 
 /**
  * Same floor bank-integrity.test.ts puts on static java content: grading these kinds
@@ -184,6 +187,71 @@ describe("generator contracts", () => {
         }
       }
     }
+  });
+
+  it("api-java-blank renders exactly one blank per snippet and reaches every table row", () => {
+    const gen = allGenerators.find((g) => g.family === "api-java-blank")!;
+    expect(gen.tiers).toEqual([1, 2]);
+    const titlesByTier = new Map<number, Set<string>>();
+    for (const tier of gen.tiers) {
+      const titles = new Set<string>();
+      for (const seed of [...SEEDS, ...SEED_SPREAD]) {
+        const ex = gen.generate(seed, tier);
+        if (ex.kind !== "cloze") throw new Error("api-java-blank must produce cloze");
+        expect(ex.language).toBe("java");
+        // No JVM is ever spawned for a cloze, so this kind keeps the schema default
+        // rather than the 20s floor the java code/predict kinds need.
+        expect(ex.testTimeoutMs).toBe(10_000);
+        // Two blanks would make the answer ambiguous under exact-match grading, and
+        // bank-integrity's `toContain("____")` cannot see the difference.
+        expect(ex.snippet.match(/____/g), `${ex.id} t${tier}: not exactly one blank`).toHaveLength(1);
+        expect(ex.acceptedAnswers.length).toBeGreaterThan(0);
+        // Every answer is a bare java method name: no punctuation, no call parens,
+        // nothing whose normalization could differ from what the user types.
+        for (const a of ex.acceptedAnswers) expect(a, `${ex.id}: ${a}`).toMatch(/^[A-Za-z][A-Za-z0-9]*$/);
+        titles.add(ex.title);
+      }
+      // A row that stopped rendering (or a fifth row nobody can draw) lands here.
+      expect(titles.size, `tier ${tier} does not render all four table rows`).toBe(4);
+      titlesByTier.set(tier, titles);
+    }
+    const [t1, t2] = [titlesByTier.get(1)!, titlesByTier.get(2)!];
+    expect([...t1].filter((t) => t2.has(t)), "the 4/4 tier split leaks a row across tiers").toEqual([]);
+  });
+
+  it("api-java-blank's accepted sets hold the line on aliases", () => {
+    const gen = allGenerators.find((g) => g.family === "api-java-blank")!;
+    const byTitle = (tier: number, title: string) => {
+      const ex = SEED_SPREAD.map((s) => gen.generate(s, tier)).find((e) => e.title === title);
+      if (!ex || ex.kind !== "cloze") throw new Error(`no ${title} variant rendered`);
+      return ex;
+    };
+
+    // Deque.push is specified as "equivalent to addFirst", so the alias is a right
+    // answer to a prompt that asks for the behaviour - grading it wrong would cost the
+    // user rating. offerFirst does land in the same place on an unbounded ArrayDeque,
+    // so the prompt has to exclude it by name ("the void insert, not the boolean offer
+    // form") rather than the accepted set pretending it misbehaves; addLast is simply
+    // the wrong end for the pop() below.
+    const stack = byTitle(1, "Deque as a stack");
+    expect(gradeCloze(stack, "push")).toBe(true);
+    expect(gradeCloze(stack, "addFirst")).toBe(true);
+    expect(gradeCloze(stack, "offerFirst")).toBe(false);
+    expect(gradeCloze(stack, "addLast")).toBe(false);
+
+    // The two-arg shape is what rules `get` out - Map.get takes one key, so the call
+    // would not even compile - and putIfAbsent returns the *previous* value, i.e. null
+    // on a first sighting, an NPE the moment it is unboxed into `int c`.
+    const counts = byTitle(1, "Count without a null check");
+    expect(gradeCloze(counts, "getOrDefault")).toBe(true);
+    expect(gradeCloze(counts, "get")).toBe(false);
+    expect(gradeCloze(counts, "putIfAbsent")).toBe(false);
+
+    // "sequentially" in the prompt is what excludes parallelSort, which reorders the
+    // same way through a different execution contract.
+    const rows = byTitle(2, "Sort rows by first column");
+    expect(gradeCloze(rows, "sort")).toBe(true);
+    expect(gradeCloze(rows, "parallelSort")).toBe(false);
   });
 
   it("cloze generators always include the blank", () => {
