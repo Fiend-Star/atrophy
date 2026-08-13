@@ -9,12 +9,20 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * Pinned JVM runtime flags: formatted output must not drift with the host's
  * locale or timezone, and file I/O is always UTF-8 (JEP 400 default is 18+,
  * but explicit beats implicit).
+ *
+ * stdout/stderr need their own pin: since JDK 19 `file.encoding` no longer
+ * covers the console streams, and a *redirected* System.out (which is what
+ * grading always reads) falls back to the native codepage - on Windows that
+ * turns "café 中" into mojibake before we ever parse the marker line. The
+ * properties are inert on JDK 17/18, so passing them costs nothing there.
  */
 export const JAVA_RUNTIME_FLAGS = [
   "-Dfile.encoding=UTF-8",
   "-Duser.language=en",
   "-Duser.country=US",
   "-Duser.timezone=UTC",
+  "-Dstdout.encoding=UTF-8",
+  "-Dstderr.encoding=UTF-8",
 ] as const;
 
 /** Compile gets its own generous budget - compile time is not the user's fault. */

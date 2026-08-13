@@ -35,12 +35,14 @@ describe("jdk discovery", () => {
 });
 
 describe("constants and helpers", () => {
-  it("pins encoding, locale, and timezone", () => {
+  it("pins encoding, locale, timezone, and the stdout/stderr streams", () => {
     expect(JAVA_RUNTIME_FLAGS).toEqual([
       "-Dfile.encoding=UTF-8",
       "-Duser.language=en",
       "-Duser.country=US",
       "-Duser.timezone=UTC",
+      "-Dstdout.encoding=UTF-8",
+      "-Dstderr.encoding=UTF-8",
     ]);
     expect(JAVA_COMPILE_TIMEOUT_MS).toBe(30_000);
   });

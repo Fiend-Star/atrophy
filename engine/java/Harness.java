@@ -112,13 +112,25 @@ public final class Harness {
         System.out.println("ATROPHY_RESULT " + Json.write(result));
     }
 
+    /**
+     * Starter signatures are package-private, so getMethods() (public only) would
+     * miss every one of them. Union in the declared methods up the superclass chain
+     * and dedupe by generic signature. Harness and Solution share the unnamed
+     * package, so package-private access needs no setAccessible.
+     */
     private static Method findMethod(Class<?> cls, String name, int arity) {
-        List<Method> nameMatches = new ArrayList<>();
+        Map<String, Method> bySignature = new LinkedHashMap<>();
         for (Method m : cls.getMethods()) {
-            if (m.getName().equals(name)) nameMatches.add(m);
+            if (m.getName().equals(name)) bySignature.putIfAbsent(m.toGenericString(), m);
         }
+        for (Class<?> c = cls; c != null; c = c.getSuperclass()) {
+            for (Method m : c.getDeclaredMethods()) {
+                if (m.getName().equals(name)) bySignature.putIfAbsent(m.toGenericString(), m);
+            }
+        }
+        List<Method> nameMatches = new ArrayList<>(bySignature.values());
         if (nameMatches.isEmpty()) {
-            throw new HarnessProblem("no public method named `" + name + "` on Solution - keep the starter signature");
+            throw new HarnessProblem("no method named `" + name + "` on Solution - keep the starter signature");
         }
         List<Method> arityMatches = new ArrayList<>();
         for (Method m : nameMatches) {
@@ -130,7 +142,11 @@ public final class Harness {
         if (arityMatches.size() > 1) {
             throw new HarnessProblem("`" + name + "` has " + arityMatches.size() + " overloads with " + arity + " parameter(s) - overloads are not supported");
         }
-        return arityMatches.get(0);
+        Method method = arityMatches.get(0);
+        if (Modifier.isPrivate(method.getModifiers())) {
+            throw new HarnessProblem("`" + name + "` is private - make it package-private or public");
+        }
+        return method;
     }
 
     // ---------- coercion: parsed JSON -> declared parameter type ----------
@@ -142,7 +158,7 @@ public final class Harness {
             if (raw.isPrimitive()) throw new HarnessProblem("test passes null into primitive " + raw.getName());
             return null;
         }
-        if (raw == int.class || raw == Integer.class) return (int) requireIntegral(v, "int");
+        if (raw == int.class || raw == Integer.class) return requireInt(v);
         if (raw == long.class || raw == Long.class) return requireIntegral(v, "long");
         if (raw == double.class || raw == Double.class) {
             if (v instanceof Number n) return n.doubleValue();
@@ -178,6 +194,12 @@ public final class Harness {
         }
         if (Map.class.isAssignableFrom(raw)) {
             if (!(v instanceof Map<?, ?> map)) throw new HarnessProblem("cannot coerce " + typeName(v) + " to Map");
+            Type keyType = typeArg(type, 0);
+            if (keyType != null && keyType != String.class) {
+                // JSON object keys are strings; handing them to a Map<Integer,..> would
+                // only surface as a ClassCastException blamed on the user's own line.
+                throw new HarnessProblem("Map parameters must use String keys");
+            }
             Type valType = typeArg(type, 1);
             Map<String, Object> out = new LinkedHashMap<>();
             for (Map.Entry<?, ?> e : map.entrySet()) {
@@ -188,10 +210,27 @@ public final class Harness {
         throw new HarnessProblem("unsupported parameter type " + raw.getName() + " (supported: primitives, String, arrays, List, Map, Object)");
     }
 
+    /** 2^63: the magnitude at which a (long) cast stops round-tripping and starts saturating. */
+    private static final double LONG_LIMIT = 9.223372036854775808E18;
+
     private static long requireIntegral(Object v, String target) {
         if (v instanceof Long l) return l;
-        if (v instanceof Double d && d == Math.rint(d) && !d.isInfinite()) return (long) (double) d;
+        if (v instanceof Double d && d == Math.rint(d) && !d.isInfinite()) {
+            if (d < -LONG_LIMIT || d >= LONG_LIMIT) {
+                throw new HarnessProblem("test passes " + d + " which does not fit " + target);
+            }
+            return (long) (double) d;
+        }
         throw new HarnessProblem("cannot coerce " + (v instanceof Number ? String.valueOf(v) : typeName(v)) + " to " + target);
+    }
+
+    /** Narrowing to int must never wrap silently - a truncated arg grades the wrong question. */
+    private static int requireInt(Object v) {
+        long l = requireIntegral(v, "int");
+        if (l < Integer.MIN_VALUE || l > Integer.MAX_VALUE) {
+            throw new HarnessProblem("test passes " + l + " which does not fit int");
+        }
+        return (int) l;
     }
 
     private static Class<?> rawClass(Type type) {
@@ -240,10 +279,17 @@ public final class Harness {
         return v == null ? "null" : v.getClass().getSimpleName();
     }
 
+    /** The top user frames only: the reflective call plumbing under them is our noise, not theirs. */
     private static String describeThrowable(Throwable t) {
         StringBuilder sb = new StringBuilder(t.toString());
-        StackTraceElement[] trace = t.getStackTrace();
-        for (int i = 0; i < Math.min(2, trace.length); i++) sb.append("\n  at ").append(trace[i]);
+        int shown = 0;
+        for (StackTraceElement frame : t.getStackTrace()) {
+            String cls = frame.getClassName();
+            if (cls.startsWith("jdk.internal.reflect") || cls.startsWith("java.lang.reflect.")) continue;
+            if (cls.equals("Harness") || cls.startsWith("Harness$")) break;
+            sb.append("\n  at ").append(frame);
+            if (++shown == 2) break;
+        }
         return sb.toString();
     }
 
