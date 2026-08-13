@@ -1,0 +1,12 @@
+{
+  "id": "api-java-003",
+  "kind": "cloze",
+  "axis": "api-memory",
+  "language": "java",
+  "tier": 2,
+  "title": "Bucket the words by length",
+  "prompt": "Fill the blank: the Collectors factory that takes a single classifier function and returns a Map from each classifier result to the List of elements that produced it. The declared result type tells you which one it is.",
+  "softTimeLimitSeconds": 90,
+  "snippet": "List<String> words = List.of(\"fig\", \"apple\", \"kiwi\", \"plum\");\nMap<Integer, List<String>> byLength = words.stream()\n        .collect(Collectors.____(w -> w.length()));\n// byLength.get(4) == [kiwi, plum]",
+  "acceptedAnswers": ["groupingBy"]
+}

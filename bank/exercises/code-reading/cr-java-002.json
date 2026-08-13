@@ -1,0 +1,12 @@
+{
+  "id": "cr-java-002",
+  "kind": "predict-output",
+  "axis": "code-reading",
+  "language": "java",
+  "tier": 1,
+  "title": "StringBuilder in place",
+  "prompt": "Read the snippet. Predict its exact stdout (one println per line). Remember that every StringBuilder call mutates the same buffer.",
+  "softTimeLimitSeconds": 120,
+  "testTimeoutMs": 20000,
+  "snippet": "public class Main {\n    public static void main(String[] args) {\n        StringBuilder sb = new StringBuilder(\"atrophy\");\n        sb.insert(0, \"[\").append(\"]\");\n        System.out.println(sb);\n        sb.deleteCharAt(1);\n        System.out.println(sb);\n        sb.delete(1, 4);\n        System.out.println(sb);\n        System.out.println(sb.reverse());\n        System.out.println(sb.length());\n    }\n}\n"
+}

@@ -1,0 +1,12 @@
+{
+  "id": "api-java-002",
+  "kind": "cloze",
+  "axis": "api-memory",
+  "language": "java",
+  "tier": 1,
+  "title": "Sort descending without a lambda",
+  "prompt": "Fill the blank: the no-argument Comparator factory that imposes the reverse of natural ordering.",
+  "softTimeLimitSeconds": 60,
+  "snippet": "List<String> names = List.of(\"mia\", \"ana\", \"zed\");\nList<String> descending = names.stream()\n        .sorted(Comparator.____())\n        .toList();\n// descending == [zed, mia, ana]",
+  "acceptedAnswers": ["reverseOrder"]
+}

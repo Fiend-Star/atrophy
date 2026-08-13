@@ -1,0 +1,12 @@
+{
+  "id": "cr-java-004",
+  "kind": "predict-output",
+  "axis": "code-reading",
+  "language": "java",
+  "tier": 2,
+  "title": "Where the exception lands",
+  "prompt": "Read the snippet. Predict its exact stdout (one println per line). Every throw here is caught, so mind both which lines run and which class name is printed.",
+  "softTimeLimitSeconds": 180,
+  "testTimeoutMs": 20000,
+  "snippet": "public class Main {\n    public static void main(String[] args) {\n        int[] nums = {1, 2, 3};\n        int sum = 0;\n        try {\n            for (int i = 0; i <= nums.length; i++) {\n                sum += nums[i];\n                System.out.println(\"added index \" + i);\n            }\n        } catch (ArrayIndexOutOfBoundsException e) {\n            System.out.println(\"caught \" + e.getClass().getSimpleName());\n        } finally {\n            System.out.println(\"sum=\" + sum);\n        }\n\n        try {\n            Object token = \"42\";\n            Integer n = (Integer) token;\n            System.out.println(\"cast to \" + n);\n        } catch (RuntimeException e) {\n            System.out.println(\"caught \" + e.getClass().getSimpleName());\n        }\n\n        System.out.println(\"done\");\n    }\n}\n"
+}
