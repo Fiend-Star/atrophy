@@ -1,0 +1,23 @@
+{
+  "id": "sr-java-002",
+  "kind": "write",
+  "axis": "syntax-recall",
+  "language": "java",
+  "tier": 2,
+  "title": "Top k most frequent words",
+  "prompt": "Write topFrequent(String[] words, int k) returning a List<String> (not an array,\nnot a Set) holding the k most frequent words, most frequent first. Words with the\nsame count are ordered lexicographically ascending, so the answer is always unique.\nk never exceeds the number of distinct words, and k == 0 returns an empty list.\nDuplicate words in the input just add to their count.\n\nExamples:\n  topFrequent([\"i\", \"love\", \"java\", \"i\", \"love\", \"coding\"], 2)\n    -> [\"i\", \"love\"]            // both appear twice, \"i\" sorts first\n  topFrequent([\"b\", \"a\", \"c\"], 2)\n    -> [\"a\", \"b\"]               // all tied at 1, so purely lexicographic\n\nKeep the class name Solution and the given method signature.",
+  "functionName": "topFrequent",
+  "starterCode": "import java.util.ArrayList;\nimport java.util.List;\n\npublic class Solution {\n    static List<String> topFrequent(String[] words, int k) {\n        // your code\n        return new ArrayList<>();\n    }\n}\n",
+  "softTimeLimitSeconds": 300,
+  "testTimeoutMs": 20000,
+  "tests": [
+    { "args": [["i", "love", "java", "i", "love", "coding"], 2], "expected": ["i", "love"] },
+    { "args": [["the", "day", "is", "sunny", "the", "the", "the", "sunny", "is", "is"], 4], "expected": ["the", "is", "sunny", "day"] },
+    { "args": [[], 0], "expected": [] },
+    { "args": [["a"], 1], "expected": ["a"] },
+    { "args": [["b", "a", "c"], 2], "expected": ["a", "b"] },
+    { "args": [["z", "z", "y", "y", "x"], 2], "expected": ["y", "z"] },
+    { "args": [["aa", "aa", "b"], 2], "expected": ["aa", "b"] },
+    { "args": [["apple", "banana", "apple", "cherry", "banana", "apple"], 1], "expected": ["apple"] }
+  ]
+}

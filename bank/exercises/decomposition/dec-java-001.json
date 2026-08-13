@@ -1,0 +1,22 @@
+{
+  "id": "dec-java-001",
+  "kind": "write",
+  "axis": "decomposition",
+  "language": "java",
+  "tier": 1,
+  "title": "Run-length encode a string",
+  "prompt": "Write runLengthEncode(String s) returning the run-length encoding of s: walk the\nstring left to right and replace each maximal run of one repeated character with that\ncharacter followed by the length of the run. A run of length 1 still gets its count.\nThe encoding is case sensitive, and the empty string encodes to the empty string.\n\nExamples:\n  runLengthEncode(\"aaabb\")  -> \"a3b2\"\n  runLengthEncode(\"abc\")    -> \"a1b1c1\"\n  runLengthEncode(\"aabbaa\") -> \"a2b2a2\"   // the two a-runs stay separate\n  runLengthEncode(\"\")       -> \"\"\n\nKeep the class name Solution and the given method signature.",
+  "functionName": "runLengthEncode",
+  "starterCode": "public class Solution {\n    static String runLengthEncode(String s) {\n        // your code\n        return \"\";\n    }\n}\n",
+  "softTimeLimitSeconds": 180,
+  "testTimeoutMs": 20000,
+  "tests": [
+    { "args": [""], "expected": "" },
+    { "args": ["aaabb"], "expected": "a3b2" },
+    { "args": ["abc"], "expected": "a1b1c1" },
+    { "args": ["a"], "expected": "a1" },
+    { "args": ["aabbaa"], "expected": "a2b2a2" },
+    { "args": ["wwwwwwwwww"], "expected": "w10" },
+    { "args": ["aAa"], "expected": "a1A1a1" }
+  ]
+}

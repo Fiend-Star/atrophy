@@ -1,0 +1,23 @@
+{
+  "id": "dbg-java-004",
+  "kind": "fix",
+  "axis": "debugging",
+  "language": "java",
+  "tier": 2,
+  "title": "Every sliding window shows the same numbers",
+  "prompt": "slidingWindows(int[] values, int size) must return a List<List<Integer>> holding every\ncontiguous window of length size, left to right. When size is 0 or negative, or larger\nthan values.length, return an empty list.\n\nThe row count is always right and a single-window input is always right, but as soon as\nthere is more than one window every row shows the same numbers. Find the bug and fix it.\n\nExample:\n  slidingWindows([1, 2, 3, 4], 2) -> [[1, 2], [2, 3], [3, 4]]\n\nKeep the class name Solution and the given method signature.",
+  "functionName": "slidingWindows",
+  "starterCode": "import java.util.ArrayList;\nimport java.util.List;\n\npublic class Solution {\n    static List<List<Integer>> slidingWindows(int[] values, int size) {\n        List<List<Integer>> out = new ArrayList<>();\n        if (size <= 0 || size > values.length) {\n            return out;\n        }\n        List<Integer> window = new ArrayList<>();\n        for (int start = 0; start + size <= values.length; start++) {\n            window.clear();\n            for (int i = start; i < start + size; i++) {\n                window.add(values[i]);\n            }\n            out.add(window);\n        }\n        return out;\n    }\n}\n",
+  "softTimeLimitSeconds": 420,
+  "testTimeoutMs": 20000,
+  "tests": [
+    { "args": [[1, 2, 3, 4], 2], "expected": [[1, 2], [2, 3], [3, 4]] },
+    { "args": [[5, 6, 7, 8, 9], 3], "expected": [[5, 6, 7], [6, 7, 8], [7, 8, 9]] },
+    { "args": [[1, 2, 3, 4, 5], 4], "expected": [[1, 2, 3, 4], [2, 3, 4, 5]] },
+    { "args": [[1, 2, 3], 3], "expected": [[1, 2, 3]] },
+    { "args": [[4, 4, 4], 1], "expected": [[4], [4], [4]] },
+    { "args": [[], 2], "expected": [] },
+    { "args": [[1, 2, 3], 0], "expected": [] },
+    { "args": [[1, 2], 5], "expected": [] }
+  ]
+}

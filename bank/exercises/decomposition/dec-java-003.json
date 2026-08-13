@@ -1,0 +1,23 @@
+{
+  "id": "dec-java-003",
+  "kind": "write",
+  "axis": "decomposition",
+  "language": "java",
+  "tier": 2,
+  "title": "Group anagrams into a deterministic order",
+  "prompt": "Write groupAnagrams(String[] words) returning a List<List<String>> (not a Map, not an\narray) grouping the words that are anagrams of one another. Two words are anagrams when\nthey use exactly the same letters the same number of times.\n\nThe output must be fully deterministic:\n  - inside each group, the words are sorted lexicographically ascending;\n  - the groups themselves are sorted by their first word, ascending.\nDuplicate words are kept, so they appear as repeats inside their group. Comparison is\ncase sensitive, and an empty input returns an empty list.\n\nExample:\n  groupAnagrams([\"eat\", \"tea\", \"tan\", \"ate\", \"nat\", \"bat\"])\n    -> [[\"ate\", \"eat\", \"tea\"], [\"bat\"], [\"nat\", \"tan\"]]\n\nKeep the class name Solution and the given method signature.",
+  "functionName": "groupAnagrams",
+  "starterCode": "import java.util.ArrayList;\nimport java.util.List;\n\npublic class Solution {\n    static List<List<String>> groupAnagrams(String[] words) {\n        // your code\n        return new ArrayList<>();\n    }\n}\n",
+  "softTimeLimitSeconds": 300,
+  "testTimeoutMs": 20000,
+  "tests": [
+    { "args": [[]], "expected": [] },
+    { "args": [["eat", "tea", "tan", "ate", "nat", "bat"]], "expected": [["ate", "eat", "tea"], ["bat"], ["nat", "tan"]] },
+    { "args": [[""]], "expected": [[""]] },
+    { "args": [["a"]], "expected": [["a"]] },
+    { "args": [["ab", "ba", "abc", "cab", "bca"]], "expected": [["ab", "ba"], ["abc", "bca", "cab"]] },
+    { "args": [["dog", "god", "odg", "cat"]], "expected": [["cat"], ["dog", "god", "odg"]] },
+    { "args": [["aab", "aba", "baa", "ab"]], "expected": [["aab", "aba", "baa"], ["ab"]] },
+    { "args": [["x", "x", "y"]], "expected": [["x", "x"], ["y"]] }
+  ]
+}
