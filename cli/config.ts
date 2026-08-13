@@ -8,14 +8,14 @@ export interface AtrophyConfig {
   packs?: string[];
 }
 
-export function configPath(): string {
-  return process.env.ATROPHY_CONFIG ?? join(homedir(), ".atrophy", "config.json");
+export function configPath(env: NodeJS.ProcessEnv = process.env): string {
+  return env.ATROPHY_CONFIG ?? join(homedir(), ".atrophy", "config.json");
 }
 
-export function readConfig(): AtrophyConfig {
+export function readConfig(env: NodeJS.ProcessEnv = process.env): AtrophyConfig {
   try {
     // tolerate a UTF-8 BOM (hand-edited or PowerShell-written configs)
-    return JSON.parse(readFileSync(configPath(), "utf8").replace(/^\uFEFF/, "")) as AtrophyConfig;
+    return JSON.parse(readFileSync(configPath(env), "utf8").replace(/^\uFEFF/, "")) as AtrophyConfig;
   } catch {
     return {};
   }
@@ -46,7 +46,7 @@ export function packDirs(env: NodeJS.ProcessEnv = process.env): string[] {
   const fromEnv = (env.ATROPHY_PACKS ?? "").split(delimiter);
   // a hand-edited config can hold anything; a bare string here would otherwise
   // spread one character per pack dir
-  const configured: unknown = readConfig().packs;
+  const configured: unknown = readConfig(env).packs;
   const fromConfig: unknown[] = Array.isArray(configured) ? configured : [];
   const seen = new Set<string>();
   const dirs: string[] = [];
