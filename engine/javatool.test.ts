@@ -57,6 +57,12 @@ describe("constants and helpers", () => {
     expect(parseJavaMajor("javac 25-ea")).toBe(25);
     expect(parseJavaMajor("gibberish")).toBeNull();
   });
+  it("needs a word boundary, and survives a line that opens with a date", () => {
+    // Digits inside a word are not a version - "jdk21" must not read as Java 21.
+    expect(parseJavaMajor("jdk21")).toBeNull();
+    // The 3-digit cap is what stops a leading date parsing as version 2025.
+    expect(parseJavaMajor('2025-10-21 openjdk version "21.0.9"')).toBe(21);
+  });
   it("resource candidates cover the dev and built layouts", () => {
     const cands = javaResourceCandidates();
     expect(cands).toHaveLength(2);
