@@ -124,14 +124,22 @@ public final class Harness {
      * differ in their parameters and must stay apart. Insertion order does the
      * choosing - getMethods() and then the walk from cls upward both reach the
      * most-derived declaration first, so putIfAbsent keeps it.
+     *
+     * Bridges are skipped in both passes. A bridge carries erased parameters, so it
+     * would read as a second overload (Function<String,String> gets a synthetic
+     * apply(Object)) and, where the erasure matches, could win the key and hand
+     * coerce() a raw List with its element type erased. The compiler always emits a
+     * bridge alongside the real declaration in the same class, so nothing is lost.
      */
     private static Method findMethod(Class<?> cls, String name, int arity) {
         Map<String, Method> bySignature = new LinkedHashMap<>();
         for (Method m : cls.getMethods()) {
+            if (m.isBridge()) continue;
             if (m.getName().equals(name)) bySignature.putIfAbsent(Arrays.toString(m.getParameterTypes()), m);
         }
         for (Class<?> c = cls; c != null; c = c.getSuperclass()) {
             for (Method m : c.getDeclaredMethods()) {
+                if (m.isBridge()) continue;
                 if (m.getName().equals(name)) bySignature.putIfAbsent(Arrays.toString(m.getParameterTypes()), m);
             }
         }
@@ -207,7 +215,7 @@ public final class Harness {
                 // only surface as a ClassCastException blamed on the user's own line.
                 // A wildcard or type variable is a different mistake, so say so - the
                 // starter has no concrete key type for us to check against.
-                throw new HarnessProblem(keyType instanceof Class
+                throw new HarnessProblem(keyType instanceof Class || keyType instanceof ParameterizedType
                         ? "Map parameters must use String keys"
                         : "Map parameters must declare a concrete String key type");
             }
