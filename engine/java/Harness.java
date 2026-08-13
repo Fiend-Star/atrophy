@@ -7,6 +7,7 @@ import java.lang.reflect.Type;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -114,18 +115,24 @@ public final class Harness {
 
     /**
      * Starter signatures are package-private, so getMethods() (public only) would
-     * miss every one of them. Union in the declared methods up the superclass chain
-     * and dedupe by generic signature. Harness and Solution share the unnamed
-     * package, so package-private access needs no setAccessible.
+     * miss every one of them. Union in the declared methods up the superclass chain.
+     * Harness and Solution share the unnamed package, so package-private access
+     * needs no setAccessible.
+     *
+     * The key is the parameter types alone: an override declares the same method
+     * twice (once per class) and must collapse to one entry, while genuine overloads
+     * differ in their parameters and must stay apart. Insertion order does the
+     * choosing - getMethods() and then the walk from cls upward both reach the
+     * most-derived declaration first, so putIfAbsent keeps it.
      */
     private static Method findMethod(Class<?> cls, String name, int arity) {
         Map<String, Method> bySignature = new LinkedHashMap<>();
         for (Method m : cls.getMethods()) {
-            if (m.getName().equals(name)) bySignature.putIfAbsent(m.toGenericString(), m);
+            if (m.getName().equals(name)) bySignature.putIfAbsent(Arrays.toString(m.getParameterTypes()), m);
         }
         for (Class<?> c = cls; c != null; c = c.getSuperclass()) {
             for (Method m : c.getDeclaredMethods()) {
-                if (m.getName().equals(name)) bySignature.putIfAbsent(m.toGenericString(), m);
+                if (m.getName().equals(name)) bySignature.putIfAbsent(Arrays.toString(m.getParameterTypes()), m);
             }
         }
         List<Method> nameMatches = new ArrayList<>(bySignature.values());
@@ -198,7 +205,11 @@ public final class Harness {
             if (keyType != null && keyType != String.class) {
                 // JSON object keys are strings; handing them to a Map<Integer,..> would
                 // only surface as a ClassCastException blamed on the user's own line.
-                throw new HarnessProblem("Map parameters must use String keys");
+                // A wildcard or type variable is a different mistake, so say so - the
+                // starter has no concrete key type for us to check against.
+                throw new HarnessProblem(keyType instanceof Class
+                        ? "Map parameters must use String keys"
+                        : "Map parameters must declare a concrete String key type");
             }
             Type valType = typeArg(type, 1);
             Map<String, Object> out = new LinkedHashMap<>();
@@ -282,13 +293,19 @@ public final class Harness {
     /** The top user frames only: the reflective call plumbing under them is our noise, not theirs. */
     private static String describeThrowable(Throwable t) {
         StringBuilder sb = new StringBuilder(t.toString());
+        StackTraceElement[] trace = t.getStackTrace();
         int shown = 0;
-        for (StackTraceElement frame : t.getStackTrace()) {
+        for (StackTraceElement frame : trace) {
             String cls = frame.getClassName();
             if (cls.startsWith("jdk.internal.reflect") || cls.startsWith("java.lang.reflect.")) continue;
             if (cls.equals("Harness") || cls.startsWith("Harness$")) break;
             sb.append("\n  at ").append(frame);
             if (++shown == 2) break;
+        }
+        // Nothing survived the filter (the throw sits above any user frame) - a bare
+        // exception name is useless, so fall back to the trace as the JVM gave it.
+        if (shown == 0) {
+            for (int i = 0; i < Math.min(2, trace.length); i++) sb.append("\n  at ").append(trace[i]);
         }
         return sb.toString();
     }
