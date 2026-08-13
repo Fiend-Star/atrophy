@@ -1,12 +1,21 @@
-import { writeFileSync } from "node:fs";
+import { copyFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
   ClozeExercise,
   CodeExercise,
+  CodeLikeExercise,
   OutlineExercise,
   PredictExercise,
 } from "../bank/schema.js";
-import { run } from "./runner.js";
+import {
+  JAVA_COMPILE_TIMEOUT_MS,
+  JAVA_RUNTIME_FLAGS,
+  javaCommand,
+  javacCommand,
+  javaResourceDir,
+  missingJdkHint,
+} from "./javatool.js";
+import { run, type RunResult } from "./runner.js";
 
 export interface TestFailure {
   index: number;
@@ -26,8 +35,9 @@ export interface GradeResult {
 
 const RESULT_MARKER = "ATROPHY_RESULT ";
 
-export function solutionFileName(ex: CodeExercise | OutlineExercise): string {
+export function solutionFileName(ex: CodeLikeExercise | OutlineExercise): string {
   if (ex.kind === "outline") return "outline.md";
+  if (ex.language === "java") return "Solution.java";
   return ex.language === "python" ? "solution.py" : "solution.js";
 }
 
@@ -121,10 +131,101 @@ emit({ passed, total, failures });
 }
 
 /**
+ * Turn a finished harness run into a GradeResult: the timeout wins, then the
+ * last ATROPHY_RESULT line, then whatever the process said before dying.
+ * Shared by every language path so they fail the same way.
+ */
+function parseMarker(result: RunResult, total: number, timeoutMs: number): GradeResult {
+  if (result.timedOut) {
+    return {
+      passed: 0,
+      total,
+      failures: [],
+      harnessError: `tests timed out after ${timeoutMs} ms (infinite loop?)`,
+    };
+  }
+
+  const line = result.stdout
+    .split(/\r?\n/)
+    .reverse()
+    .find((l) => l.startsWith(RESULT_MARKER));
+  if (!line) {
+    const detail = (result.stderr || result.stdout).trim().slice(0, 2000);
+    return {
+      passed: 0,
+      total,
+      failures: [],
+      harnessError: detail || `harness produced no result (exit ${result.exitCode})`,
+    };
+  }
+  return JSON.parse(line.slice(RESULT_MARKER.length)) as GradeResult;
+}
+
+/** javac + java with friendly errors; returns a GradeResult on failure, or the run result. */
+async function compileAndRunJava(
+  dir: string,
+  sources: string[],
+  mainClass: string,
+  total: number,
+  timeoutMs: number,
+): Promise<{ error: GradeResult } | { result: RunResult }> {
+  const fail = (harnessError: string) => ({ error: { passed: 0, total, failures: [], harnessError } });
+
+  let compile;
+  try {
+    // Compile gets its own budget: javac time is not the user's thinking time.
+    // -J pins javac's own JVM locale so diagnostics read the same on every host,
+    // the way JAVA_RUNTIME_FLAGS pins the graded run.
+    compile = await run(
+      javacCommand(),
+      ["-J-Duser.language=en", "-J-Duser.country=US", "-encoding", "UTF-8", ...sources],
+      { cwd: dir, timeoutMs: JAVA_COMPILE_TIMEOUT_MS },
+    );
+  } catch (err) {
+    return fail(`${missingJdkHint(javacCommand())} (${(err as Error).message})`);
+  }
+  if (compile.timedOut) return fail(`javac timed out after ${JAVA_COMPILE_TIMEOUT_MS} ms`);
+  if (compile.exitCode !== 0) {
+    const detail = (compile.stderr || compile.stdout).trim().slice(0, 2000);
+    return fail(`javac: ${detail || `exited ${compile.exitCode}`}`);
+  }
+
+  let result;
+  try {
+    result = await run(javaCommand(), [...JAVA_RUNTIME_FLAGS, mainClass], { cwd: dir, timeoutMs });
+  } catch (err) {
+    return fail(`${missingJdkHint(javaCommand())} (${(err as Error).message})`);
+  }
+  return { result };
+}
+
+/** Java write/fix: the shipped reflection harness reads tests.json and calls Solution. */
+async function gradeJavaTests(ex: CodeExercise, dir: string): Promise<GradeResult> {
+  const total = ex.tests.length;
+  try {
+    copyFileSync(join(javaResourceDir(), "Harness.java"), join(dir, "Harness.java"));
+    writeFileSync(
+      join(dir, "tests.json"),
+      JSON.stringify({ functionName: ex.functionName, tests: ex.tests }),
+      "utf8",
+    );
+  } catch (err) {
+    // javaResourceDir() throws on a broken install; the drill loop has no catch, so
+    // an escaping error would kill the session and the user's in-progress work.
+    return { passed: 0, total, failures: [], harnessError: `could not stage the Java harness: ${(err as Error).message}` };
+  }
+  const outcome = await compileAndRunJava(dir, ["Solution.java", "Harness.java"], "Harness", total, ex.testTimeoutMs);
+  if ("error" in outcome) return outcome.error;
+  return parseMarker(outcome.result, total, ex.testTimeoutMs);
+}
+
+/**
  * Grade the solution file sitting in `dir` against the exercise's hidden tests.
  * Writes the language harness next to it and runs it in a subprocess.
  */
 export async function grade(ex: CodeExercise, dir: string): Promise<GradeResult> {
+  if (ex.language === "java") return gradeJavaTests(ex, dir);
+
   const isPy = ex.language === "python";
   const harnessName = isPy ? "__atrophy_harness__.py" : "__atrophy_harness__.cjs";
   writeFileSync(join(dir, harnessName), isPy ? pythonHarness(ex) : nodeHarness(ex), "utf8");
@@ -141,30 +242,7 @@ export async function grade(ex: CodeExercise, dir: string): Promise<GradeResult>
       harnessError: `could not start ${cmd}: ${(err as Error).message}`,
     };
   }
-
-  if (result.timedOut) {
-    return {
-      passed: 0,
-      total: ex.tests.length,
-      failures: [],
-      harnessError: `tests timed out after ${ex.testTimeoutMs} ms (infinite loop?)`,
-    };
-  }
-
-  const line = result.stdout
-    .split(/\r?\n/)
-    .reverse()
-    .find((l) => l.startsWith(RESULT_MARKER));
-  if (!line) {
-    const detail = (result.stderr || result.stdout).trim().slice(0, 2000);
-    return {
-      passed: 0,
-      total: ex.tests.length,
-      failures: [],
-      harnessError: detail || `harness produced no result (exit ${result.exitCode})`,
-    };
-  }
-  return JSON.parse(line.slice(RESULT_MARKER.length)) as GradeResult;
+  return parseMarker(result, ex.tests.length, ex.testTimeoutMs);
 }
 
 /** Canonicalize program output: CRLF→LF, strip per-line trailing space + outer blank lines. */
