@@ -253,6 +253,34 @@ describe.skipIf(!hasJdk())("grade - java type matrix", () => {
   }, 60_000);
 });
 
+// Deliberately outside the JDK gate: both paths fail before javac is ever spawned,
+// so a host with no JDK still exercises part of the java grader.
+describe("grade - java failure paths that need no JDK", () => {
+  it("returns the install hint when the JDK is missing", async () => {
+    const previous = process.env.ATROPHY_JAVA_HOME;
+    process.env.ATROPHY_JAVA_HOME = join(tmpdir(), "atrophy-no-such-jdk-home");
+    try {
+      const r = await grade(javaEx, scratch());
+      expect(r.passed).toBe(0);
+      expect(r.total).toBe(3);
+      expect(r.harnessError).toMatch(/not found - Java drills need a JDK/);
+    } finally {
+      if (previous === undefined) delete process.env.ATROPHY_JAVA_HOME;
+      else process.env.ATROPHY_JAVA_HOME = previous;
+    }
+  });
+
+  it("reports a staging failure instead of throwing into the drill loop", async () => {
+    // An unusable grading dir makes the harness copy throw, the same branch a broken
+    // install hits. Session.ts has no try/catch around grade(), so an escaping error
+    // would end the session and lose the user's work - it must come back as a result.
+    const r = await grade(javaEx, join(scratch(), "never-created"));
+    expect(r.passed).toBe(0);
+    expect(r.total).toBe(3);
+    expect(r.harnessError).toMatch(/could not stage the Java harness/);
+  });
+});
+
 describe("normalizeOutput", () => {
   it("ignores CRLF, trailing spaces, and outer blank lines", () => {
     expect(normalizeOutput("a \r\nb\r\n\r\n")).toBe("a\nb");
