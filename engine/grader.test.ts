@@ -145,16 +145,10 @@ const javaEx: CodeExercise = {
 };
 
 if (!hasJdk()) console.warn("⚠ JDK not found - Java grader tests SKIPPED. Install JDK 21 to validate Java grading.");
-// The solutions below declare `public static`, while starterCode (and every java
-// exercise in the plan) declares package-private `static`. That mismatch is a known
-// Harness.java defect, not a preference: findMethod scans getMethods(), which sees
-// public methods only, so it rejects the very starter signature it tells you to keep.
-// When Harness switches to getDeclaredMethods(), drop the `public` here - these
-// fixtures should look like real bank content.
 describe.skipIf(!hasJdk())("grade - java", () => {
   it("passes a correct solution", async () => {
     const dir = scratch();
-    writeSolution(dir, javaEx, "public class Solution {\n    public static int twice(int x) { return x * 2; }\n}\n");
+    writeSolution(dir, javaEx, "public class Solution {\n    static int twice(int x) { return x * 2; }\n}\n");
     const r = await grade(javaEx, dir);
     expect(r.harnessError).toBeUndefined();
     expect(r.passed).toBe(3);
@@ -163,7 +157,7 @@ describe.skipIf(!hasJdk())("grade - java", () => {
 
   it("reports per-test failures with expected vs actual", async () => {
     const dir = scratch();
-    writeSolution(dir, javaEx, "public class Solution {\n    public static int twice(int x) { return x + 2; }\n}\n");
+    writeSolution(dir, javaEx, "public class Solution {\n    static int twice(int x) { return x + 2; }\n}\n");
     const r = await grade(javaEx, dir);
     expect(r.passed).toBe(1);
     expect(r.failures.length).toBe(2);
@@ -182,15 +176,14 @@ describe.skipIf(!hasJdk())("grade - java", () => {
 
   it("names the problem when the method is missing", async () => {
     const dir = scratch();
-    writeSolution(dir, javaEx, "public class Solution { public static int other(int x) { return x; } }\n");
+    writeSolution(dir, javaEx, "public class Solution { static int other(int x) { return x; } }\n");
     const r = await grade(javaEx, dir);
-    // Tolerant of the "public" the message loses once findMethod scans declared methods.
-    expect(r.failures[0]?.error).toMatch(/no (public )?method named `twice`/);
+    expect(r.failures[0]?.error).toMatch(/no method named `twice`/);
   }, 60_000);
 
   it("kills infinite loops via the hard timeout", async () => {
     const dir = scratch();
-    writeSolution(dir, javaEx, "public class Solution {\n    public static int twice(int x) { while (true) {} }\n}\n");
+    writeSolution(dir, javaEx, "public class Solution {\n    static int twice(int x) { while (true) {} }\n}\n");
     const fast = { ...javaEx, testTimeoutMs: 5000 };
     const r = await grade(fast, dir);
     expect(r.passed).toBe(0);
@@ -216,7 +209,7 @@ describe.skipIf(!hasJdk())("grade - java type matrix", () => {
 
   it("coerces int[] and returns arrays as lists", async () => {
     const r = await gradeWith(
-      "public class Solution { public static int[] probe(int[] xs) { int[] out = new int[xs.length]; for (int i = 0; i < xs.length; i++) out[i] = xs[i] * 2; return out; } }",
+      "public class Solution { static int[] probe(int[] xs) { int[] out = new int[xs.length]; for (int i = 0; i < xs.length; i++) out[i] = xs[i] * 2; return out; } }",
       [{ args: [[1, 2, 3]], expected: [2, 4, 6] }],
     );
     expect(r.passed).toBe(1);
@@ -224,7 +217,7 @@ describe.skipIf(!hasJdk())("grade - java type matrix", () => {
 
   it("coerces List<Integer> via generics (elements are Integer, not Double)", async () => {
     const r = await gradeWith(
-      "import java.util.List;\npublic class Solution { public static int probe(List<Integer> xs) { int s = 0; for (int x : xs) s += x; return s; } }",
+      "import java.util.List;\npublic class Solution { static int probe(List<Integer> xs) { int s = 0; for (int x : xs) s += x; return s; } }",
       [{ args: [[1, 2, 3]], expected: 6 }],
     );
     expect(r.passed).toBe(1);
@@ -232,7 +225,7 @@ describe.skipIf(!hasJdk())("grade - java type matrix", () => {
 
   it("treats 2.0 and 2 as equal (number model)", async () => {
     const r = await gradeWith(
-      "public class Solution { public static double probe(int x) { return x * 1.0; } }",
+      "public class Solution { static double probe(int x) { return x * 1.0; } }",
       [{ args: [2], expected: 2 }],
     );
     expect(r.passed).toBe(1);
@@ -240,7 +233,7 @@ describe.skipIf(!hasJdk())("grade - java type matrix", () => {
 
   it("supports Map returns with sorted keys and instance methods", async () => {
     const r = await gradeWith(
-      "import java.util.Map;\nimport java.util.HashMap;\npublic class Solution { public Map<String, Integer> probe(String k) { Map<String, Integer> m = new HashMap<>(); m.put(k, 1); m.put(\"a\", 2); return m; } }",
+      "import java.util.Map;\nimport java.util.HashMap;\npublic class Solution { Map<String, Integer> probe(String k) { Map<String, Integer> m = new HashMap<>(); m.put(k, 1); m.put(\"a\", 2); return m; } }",
       [{ args: ["z"], expected: { a: 2, z: 1 } }],
     );
     expect(r.passed).toBe(1);
@@ -248,12 +241,12 @@ describe.skipIf(!hasJdk())("grade - java type matrix", () => {
 
   it("accepts char params as 1-char strings; names overload ambiguity", async () => {
     const ok = await gradeWith(
-      "public class Solution { public static String probe(char c) { return String.valueOf(c) + c; } }",
+      "public class Solution { static String probe(char c) { return String.valueOf(c) + c; } }",
       [{ args: ["x"], expected: "xx" }],
     );
     expect(ok.passed).toBe(1);
     const overloaded = await gradeWith(
-      "public class Solution { public static int probe(int x) { return x; } public static int probe(String s) { return 0; } }",
+      "public class Solution { static int probe(int x) { return x; } static int probe(String s) { return 0; } }",
       [{ args: [1], expected: 1 }],
     );
     expect(overloaded.failures[0]?.error).toMatch(/overloads are not supported/);
