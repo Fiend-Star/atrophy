@@ -178,8 +178,14 @@ function parseMarker(result: RunResult, total: number, timeoutMs: number): Grade
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return unparseable;
   const graded = parsed as GradeResult;
-  // A hand-rolled harness may omit an empty failures list; printFailures indexes it.
-  return { ...graded, failures: Array.isArray(graded.failures) ? graded.failures : [] };
+  // A hand-rolled harness may omit an empty failures list; printFailures indexes it,
+  // and reads .args off each element - a null entry would throw there, mid-drill.
+  return {
+    ...graded,
+    failures: Array.isArray(graded.failures)
+      ? graded.failures.filter((f) => f !== null && typeof f === "object")
+      : [],
+  };
 }
 
 /** javac + java with friendly errors; returns a GradeResult on failure, or the run result. */
@@ -275,7 +281,11 @@ async function gradeHarness(ex: HarnessExercise, dir: string): Promise<GradeResu
   }
   // Clamp what gets rendered and persisted: the count is pack-authored, and
   // exerciseScore's clamp only protects the rating, not the stored row or "7/2 passed".
-  return { ...parsed, passed: Math.min(Math.max(parsed.passed, 0), total) };
+  // Non-finite (absent, null, a string, NaN) scores 0 - it is not evidence of anything.
+  return {
+    ...parsed,
+    passed: Number.isFinite(parsed.passed) ? Math.min(Math.max(parsed.passed, 0), total) : 0,
+  };
 }
 
 /**

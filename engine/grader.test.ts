@@ -365,6 +365,36 @@ describe.skipIf(!hasJdk())("grade - java testCode", () => {
     expect(r.total).toBe(2);
   }, 90_000);
 
+  it("drops non-object entries from a marker's failures list", async () => {
+    const dir = scratch();
+    const nullEntry: HarnessExercise = {
+      ...harnessEx,
+      id: "conc-java-907",
+      testCode: 'public class Harness { public static void main(String[] a) { System.out.println("ATROPHY_RESULT {\\"passed\\":0,\\"total\\":2,\\"failures\\":[null,{\\"index\\":0,\\"error\\":\\"real check\\"}]}"); } }',
+    };
+    writeSolution(dir, nullEntry, nullEntry.starterCode);
+    const r = await grade(nullEntry, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(0);
+    // A null element here reaches printFailures, which reads f.args off it and throws
+    // out of the drill loop - the good entry must survive, the junk must not.
+    expect(r.failures).toEqual([{ index: 0, error: "real check" }]);
+  }, 90_000);
+
+  it("scores a marker with a non-finite passed as 0 rather than NaN", async () => {
+    const dir = scratch();
+    const noPassed: HarnessExercise = {
+      ...harnessEx,
+      id: "conc-java-908",
+      testCode: 'public class Harness { public static void main(String[] a) { System.out.println("ATROPHY_RESULT {\\"total\\":2,\\"failures\\":[]}"); } }',
+    };
+    writeSolution(dir, noPassed, noPassed.starterCode);
+    const r = await grade(noPassed, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(0);
+    expect(Number.isFinite(r.passed)).toBe(true); // NaN would ride into exerciseScore and the rating
+  }, 90_000);
+
   it("scores a deadlocked solution 0 with named failures via the watchdog", async () => {
     const dir = scratch();
     const deadlockEx: HarnessExercise = { ...harnessEx, id: "conc-java-903", testTimeoutMs: 60_000 };
