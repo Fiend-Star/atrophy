@@ -1,10 +1,8 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
 import pc from "picocolors";
 import { AXES } from "../bank/schema.js";
 import { INITIAL_RATING } from "../engine/scoring.js";
 import type { Store } from "../store/db.js";
+import { readConfig, writeConfig } from "./config.js";
 
 /** Patched to the deployed Worker URL; override with ATROPHY_LEADERBOARD_URL. */
 export const DEFAULT_LEADERBOARD_URL = "https://atrophy-leaderboard.ashutosh123rath.workers.dev";
@@ -48,28 +46,6 @@ export function buildSnapshot(store: Store): Snapshot {
     }
   }
   return { overall: sum / AXES.length, reps, axes };
-}
-
-interface Config {
-  leaderboard?: { token?: string; handle?: string; url?: string };
-}
-
-function configPath(): string {
-  return process.env.ATROPHY_CONFIG ?? join(homedir(), ".atrophy", "config.json");
-}
-
-function readConfig(): Config {
-  try {
-    // tolerate a UTF-8 BOM (hand-edited or PowerShell-written configs)
-    return JSON.parse(readFileSync(configPath(), "utf8").replace(/^﻿/, "")) as Config;
-  } catch {
-    return {};
-  }
-}
-
-function writeConfig(config: Config): void {
-  mkdirSync(dirname(configPath()), { recursive: true });
-  writeFileSync(configPath(), JSON.stringify(config, null, 2), "utf8");
 }
 
 /** Registered for the leaderboard = auto-sync after every unaided drill. */
