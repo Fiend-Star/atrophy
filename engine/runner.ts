@@ -33,6 +33,10 @@ export function run(
     const env: Record<string, string> = {
       PATH: process.env.PATH ?? "",
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+      // JVM (and others) resolve their temp dir from TEMP/TMP; without them Windows
+      // falls back to C:\Windows, which is not writable for user processes.
+      ...(process.platform === "win32" && process.env.TEMP ? { TEMP: process.env.TEMP } : {}),
+      ...(process.platform === "win32" && process.env.TMP ? { TMP: process.env.TMP } : {}),
       ...(process.env.PYTHONIOENCODING ? {} : { PYTHONIOENCODING: "utf-8" }),
       ...opts.env,
     };
