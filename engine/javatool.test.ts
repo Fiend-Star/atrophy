@@ -1,3 +1,5 @@
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -7,9 +9,11 @@ import {
   javaCommand,
   javacCommand,
   javaResourceCandidates,
+  javaResourceDir,
   missingJdkHint,
   parseJavaMajor,
 } from "./javatool.js";
+import { run } from "./runner.js";
 
 describe("jdk discovery", () => {
   it("uses bare tool names without ATROPHY_JAVA_HOME", () => {
@@ -52,4 +56,22 @@ describe("constants and helpers", () => {
   it("hints at the JDK requirement when a tool is missing", () => {
     expect(missingJdkHint("javac")).toMatch(/JDK.*21|ATROPHY_JAVA_HOME/);
   });
+});
+
+if (!hasJdk()) console.warn("⚠ JDK not found - Java resource compile test SKIPPED. Install JDK 21 to validate.");
+describe.skipIf(!hasJdk())("java resources", () => {
+  it("Harness.java and Atrophy.java compile cleanly", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "atrophy-javares-"));
+    try {
+      cpSync(javaResourceDir(), dir, { recursive: true });
+      const r = await run(javacCommand(), ["-encoding", "UTF-8", "Harness.java", "Atrophy.java"], {
+        cwd: dir,
+        timeoutMs: JAVA_COMPILE_TIMEOUT_MS,
+      });
+      expect(r.stderr).toBe("");
+      expect(r.exitCode).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
