@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { BankError, loadBank, parseExercise, totalUnits, type RecallExercise } from "./schema.js";
+import { BankError, isHarness, loadBank, parseExercise, totalUnits, type HarnessExercise, type RecallExercise } from "./schema.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 
@@ -110,6 +110,50 @@ describe("recall kind", () => {
     expect(() => parseExercise(JSON.stringify({ ...recall, acceptedAnswers: [] }))).toThrow(BankError);
     expect(() => parseExercise(JSON.stringify({ ...recall, acceptedAnswers: [""] }))).toThrow(BankError);
     expect(() => parseExercise(JSON.stringify({ ...recall, reveal: "" }))).toThrow(BankError);
+  });
+});
+
+describe("harness kinds", () => {
+  const harness = {
+    id: "conc-java-001",
+    kind: "write-harness",
+    axis: "syntax-recall",
+    language: "java",
+    tier: 3,
+    title: "Bounded blocking queue",
+    prompt: "Implement put/take with wait/notifyAll.",
+    softTimeLimitSeconds: 1500,
+    testTimeoutMs: 30000,
+    starterCode: "public class Solution { /* ... */ }",
+    testCode: "public class Harness { public static void main(String[] a) { Atrophy.plan(3); Atrophy.report(); } }",
+    totalChecks: 3,
+  };
+  it("accepts both harness kinds and counts totalChecks units", () => {
+    const ex = parseExercise(JSON.stringify(harness));
+    expect(ex.kind).toBe("write-harness");
+    expect(totalUnits(ex)).toBe(3);
+    expect(parseExercise(JSON.stringify({ ...harness, id: "conc-java-002", kind: "fix-harness" })).kind).toBe("fix-harness");
+  });
+  it("carries starterCode and testCode through parsing", () => {
+    // z.object strips unknown keys, so this is what proves the harness fields are in the schema at all.
+    const parsed = parseExercise(JSON.stringify(harness)) as HarnessExercise;
+    expect(parsed.starterCode).toBe(harness.starterCode);
+    expect(parsed.testCode).toBe(harness.testCode);
+  });
+  it("narrows harness kinds only", () => {
+    expect(isHarness(parseExercise(JSON.stringify(harness)))).toBe(true);
+    expect(isHarness(parseExercise(JSON.stringify({ ...harness, id: "conc-java-002", kind: "fix-harness" })))).toBe(true);
+    expect(isHarness(parseExercise(JSON.stringify(valid)))).toBe(false);
+  });
+  it.each([
+    ["non-java language", { ...harness, language: "python" }],
+    ["missing testCode", { ...harness, testCode: undefined }],
+    ["empty testCode", { ...harness, testCode: "" }],
+    ["empty starterCode", { ...harness, starterCode: "" }],
+    ["zero totalChecks", { ...harness, totalChecks: 0 }],
+    ["fractional totalChecks", { ...harness, totalChecks: 1.5 }],
+  ])("rejects %s", (_name, bad) => {
+    expect(() => parseExercise(JSON.stringify(bad))).toThrow(BankError);
   });
 });
 

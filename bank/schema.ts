@@ -45,11 +45,27 @@ const codeFields = {
   tests: z.array(testCaseSchema).min(1),
 };
 
+/** Kinds where the exercise ships its own Java test harness (behavioral drills). */
+const harnessFields = {
+  ...baseFields,
+  language: z.literal("java"),
+  /** Written into Solution.java for the user to edit (for "fix-harness": the buggy code). */
+  starterCode: z.string().min(1),
+  /** A complete `public class Harness` with main(); must print one ATROPHY_RESULT line. */
+  testCode: z.string().min(1),
+  /** Declared number of checks; the harness's reported total must match at grade time. */
+  totalChecks: z.number().int().min(1),
+};
+
 export const exerciseSchema = z.discriminatedUnion("kind", [
   /** Syntax recall: write a function from spec. */
   z.object({ kind: z.literal("write"), ...codeFields }),
   /** Debugging: starterCode contains a planted bug; make the tests pass. */
   z.object({ kind: z.literal("fix"), ...codeFields }),
+  /** Write-from-spec, graded by the exercise's own Java harness (concurrency etc.). */
+  z.object({ kind: z.literal("write-harness"), ...harnessFields }),
+  /** Planted bug, graded by the exercise's own Java harness. */
+  z.object({ kind: z.literal("fix-harness"), ...harnessFields }),
   /** Code reading: predict the snippet's exact stdout (ground truth is computed by running it). */
   z.object({
     kind: z.literal("predict-output"),
@@ -85,6 +101,9 @@ export const exerciseSchema = z.discriminatedUnion("kind", [
 
 export type Exercise = z.infer<typeof exerciseSchema>;
 export type CodeExercise = Extract<Exercise, { kind: "write" | "fix" }>;
+export type HarnessExercise = Extract<Exercise, { kind: "write-harness" | "fix-harness" }>;
+/** Anything the user edits as a solution file, hidden-test or harness graded. */
+export type CodeLikeExercise = CodeExercise | HarnessExercise;
 export type PredictExercise = Extract<Exercise, { kind: "predict-output" }>;
 export type ClozeExercise = Extract<Exercise, { kind: "cloze" }>;
 export type OutlineExercise = Extract<Exercise, { kind: "outline" }>;
@@ -96,12 +115,19 @@ export function isCode(ex: Exercise): ex is CodeExercise {
   return ex.kind === "write" || ex.kind === "fix";
 }
 
+export function isHarness(ex: Exercise): ex is HarnessExercise {
+  return ex.kind === "write-harness" || ex.kind === "fix-harness";
+}
+
 /** How many gradable units the exercise has (drives passed/total bookkeeping). */
 export function totalUnits(ex: Exercise): number {
   switch (ex.kind) {
     case "write":
     case "fix":
       return ex.tests.length;
+    case "write-harness":
+    case "fix-harness":
+      return ex.totalChecks;
     case "predict-output":
     case "cloze":
       return 1;

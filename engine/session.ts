@@ -55,6 +55,9 @@ export async function runDrill(
       return outlineDrill(ex, solutionOverride);
     case "recall":
       throw new Error("recall drills are not implemented yet (lands in a later task)");
+    case "write-harness":
+    case "fix-harness":
+      throw new Error("harness drills are not implemented yet (lands in a later task)");
   }
 }
 
