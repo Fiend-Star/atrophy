@@ -1,0 +1,12 @@
+{
+  "id": "api-java-004",
+  "kind": "cloze",
+  "axis": "api-memory",
+  "language": "java",
+  "tier": 2,
+  "title": "Min-heap on the first element",
+  "prompt": "Fill the blank: the static Comparator factory that turns a key-extractor lambda into an ordering, so the queue pops the interval with the smallest start first. The int-specialized name and the generic one are both accepted.",
+  "softTimeLimitSeconds": 90,
+  "snippet": "int[][] intervals = {{3, 9}, {1, 4}, {5, 8}};\nPriorityQueue<int[]> pq = new PriorityQueue<>(Comparator.____(arr -> arr[0]));\nfor (int[] interval : intervals) {\n    pq.add(interval);\n}\n// pq.poll() is {1, 4}",
+  "acceptedAnswers": ["comparingInt", "comparing"]
+}

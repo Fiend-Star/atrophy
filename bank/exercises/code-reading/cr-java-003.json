@@ -1,0 +1,12 @@
+{
+  "id": "cr-java-003",
+  "kind": "predict-output",
+  "axis": "code-reading",
+  "language": "java",
+  "tier": 2,
+  "title": "finally versus an early return",
+  "prompt": "Read the snippet. Predict its exact stdout (one println per line). The order the lines appear in is the whole exercise.",
+  "softTimeLimitSeconds": 180,
+  "testTimeoutMs": 20000,
+  "snippet": "public class Main {\n    static int doubled(int n) {\n        try {\n            System.out.println(\"try \" + n);\n            if (n > 0) {\n                return n * 2;\n            }\n            return -1;\n        } finally {\n            System.out.println(\"finally \" + n);\n            n = 99;\n        }\n    }\n\n    public static void main(String[] args) {\n        System.out.println(\"got \" + doubled(3));\n        System.out.println(\"---\");\n        System.out.println(\"got \" + doubled(0));\n    }\n}\n"
+}

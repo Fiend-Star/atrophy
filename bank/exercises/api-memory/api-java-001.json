@@ -1,0 +1,12 @@
+{
+  "id": "api-java-001",
+  "kind": "cloze",
+  "axis": "api-memory",
+  "language": "java",
+  "tier": 1,
+  "title": "Count words without a null check",
+  "prompt": "Fill the blank: the Map method that returns the mapped value, or the fallback you hand it when the key is absent - and, unlike computeIfAbsent, stores nothing of its own.",
+  "softTimeLimitSeconds": 60,
+  "snippet": "List<String> words = List.of(\"the\", \"cat\", \"the\");\nMap<String, Integer> counts = new HashMap<>();\nfor (String word : words) {\n    counts.put(word, counts.____(word, 0) + 1);\n}\n// counts.get(\"the\") == 2",
+  "acceptedAnswers": ["getOrDefault"]
+}
