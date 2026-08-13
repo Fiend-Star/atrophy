@@ -41,9 +41,16 @@ export function missingJdkHint(cmd: string): string {
   return `${cmd} not found - Java drills need a JDK >= ${MIN_JDK_MAJOR} (Temurin recommended). Install one or set ATROPHY_JAVA_HOME.`;
 }
 
-/** "javac 21.0.9" or 'openjdk version "21.0.9" ...' -> 21 */
+/**
+ * First version-looking token in `javac -version` / `java -version` output:
+ * "javac 21.0.9", 'openjdk version "21.0.9" ...', GA builds that print no patch
+ * ("javac 21", 'openjdk version "21" ...'), and early access ("javac 25-ea") all
+ * yield the major. The token must start at a boundary and end at one, so digits
+ * inside a word (jdk21) never match; the 3-digit cap keeps a line that opens with
+ * a date (2025-10-21) from parsing as version 2025.
+ */
 export function parseJavaMajor(versionOutput: string): number | null {
-  const m = /(?:^|\s|")(\d+)\.\d+\.\d+/.exec(versionOutput);
+  const m = /(?:^|[\s"])(\d{1,3})(?=[.\-"\s]|$)/.exec(versionOutput);
   return m ? Number.parseInt(m[1]!, 10) : null;
 }
 

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   JAVA_COMPILE_TIMEOUT_MS,
   JAVA_RUNTIME_FLAGS,
+  MIN_JDK_MAJOR,
   hasJdk,
   javaCommand,
   javacCommand,
@@ -43,18 +44,30 @@ describe("constants and helpers", () => {
     ]);
     expect(JAVA_COMPILE_TIMEOUT_MS).toBe(30_000);
   });
-  it("parses javac/java version output", () => {
+  it("pins the minimum JDK major", () => {
+    expect(MIN_JDK_MAJOR).toBe(21);
+  });
+  it("parses patch, GA, and early-access version output", () => {
     expect(parseJavaMajor("javac 21.0.9")).toBe(21);
     expect(parseJavaMajor('openjdk version "21.0.9" 2025-10-21 LTS')).toBe(21);
+    expect(parseJavaMajor("javac 21")).toBe(21);
+    expect(parseJavaMajor('openjdk version "21" 2023-09-19')).toBe(21);
+    expect(parseJavaMajor("javac 25-ea")).toBe(25);
     expect(parseJavaMajor("gibberish")).toBeNull();
   });
   it("resource candidates cover the dev and built layouts", () => {
     const cands = javaResourceCandidates();
-    expect(cands.length).toBeGreaterThanOrEqual(2);
-    expect(cands.every((c) => c.endsWith(join("engine", "java")))).toBe(true);
+    expect(cands).toHaveLength(2);
+    const [dev, built] = cands;
+    expect(dev).not.toBe(built);
+    expect(dev?.endsWith(join("engine", "java"))).toBe(true);
+    expect(built?.endsWith(join("engine", "java"))).toBe(true);
   });
   it("hints at the JDK requirement when a tool is missing", () => {
-    expect(missingJdkHint("javac")).toMatch(/JDK.*21|ATROPHY_JAVA_HOME/);
+    const hint = missingJdkHint("javac");
+    expect(hint).toContain("javac");
+    expect(hint).toMatch(/JDK >= 21/);
+    expect(hint).toMatch(/ATROPHY_JAVA_HOME/);
   });
 });
 
