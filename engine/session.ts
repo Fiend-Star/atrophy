@@ -11,11 +11,13 @@ import {
   type Exercise,
   type OutlineExercise,
   type PredictExercise,
+  type RecallExercise,
 } from "../bank/schema.js";
 import {
   grade,
   gradeCloze,
   gradePrediction,
+  gradeRecall,
   solutionFileName,
   type GradeResult,
 } from "./grader.js";
@@ -56,7 +58,7 @@ export async function runDrill(
     case "outline":
       return outlineDrill(ex, solutionOverride);
     case "recall":
-      throw new Error("recall drills are not implemented yet (lands in a later task)");
+      return recallDrill(ex, solutionOverride);
   }
 }
 
@@ -109,6 +111,9 @@ export function previewExercise(ex: Exercise): void {
       break;
     case "outline":
       console.log(pc.dim(`(you would outline an approach, self-scored against ${ex.rubric.length} rubric points)`));
+      break;
+    case "recall":
+      console.log(pc.dim("(you would type a short answer; numeric forms like 1/4, 0.25, 25% are equivalent)"));
       break;
   }
   console.log(
@@ -400,6 +405,36 @@ async function clozeDrill(ex: ClozeExercise, solutionOverride?: string): Promise
       console.log(pc.red("\n✗ nope.") + ` Accepted: ${ex.acceptedAnswers.join(" | ")}`);
     }
     return makeOutcome(ex, correct ? 1 : 0, elapsed());
+  });
+}
+
+// ---------- recall (short answer, numeric-tolerant) ----------
+
+async function recallDrill(ex: RecallExercise, solutionOverride?: string): Promise<DrillOutcome> {
+  const started = Date.now();
+  const elapsed = () => (Date.now() - started) / 1000;
+
+  const finish = (correct: boolean): DrillOutcome => {
+    if (correct) console.log(pc.green("\n✓ correct") + pc.dim(` in ${Math.round(elapsed())}s`));
+    else console.log(pc.red("\n✗ nope.") + ` Accepted: ${ex.acceptedAnswers.join(" | ")}`);
+    // The reveal is the teaching moment, so it follows both outcomes - but only after
+    // an answer: abandoning returns above, without being handed the derivation.
+    if (ex.reveal) console.log(pc.dim(`\n${ex.reveal.trim()}`));
+    return makeOutcome(ex, correct ? 1 : 0, elapsed());
+  };
+
+  if (solutionOverride) {
+    const answer = readFileSync(solutionOverride, "utf8").split(/\r?\n/)[0] ?? "";
+    return finish(gradeRecall(ex, answer));
+  }
+
+  printHeader(ex);
+  printTimer(ex);
+
+  return withReadline(async (rl) => {
+    const answer = (await rl.question(pc.bold("\nYour answer (q to abandon) > "))).trim();
+    if (answer.toLowerCase() === "q") return makeOutcome(ex, 0, elapsed(), true);
+    return finish(gradeRecall(ex, answer));
   });
 }
 

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CodeExercise, Exercise, HarnessExercise } from "../bank/schema.js";
+import type { CodeExercise, Exercise, HarnessExercise, RecallExercise } from "../bank/schema.js";
 import { hasJdk } from "./javatool.js";
 import { previewExercise, runDrill, type DrillOutcome } from "./session.js";
 
@@ -37,10 +37,14 @@ function captureLog(): { lines: string[]; restore: () => void } {
  * feed the next answer whenever readline prints a prompt (the "[Enter] …" line). Waiting
  * on the prompt rather than a timer keeps it deterministic - an answer written while the
  * grader is running would be read as a line with no question pending and silently lost.
+ *
+ * `promptMatch` is the substring that identifies a prompt; kinds that ask a plain
+ * question (recall, cloze) never print "[Enter]", so they pass their own marker.
  */
 async function driveDrill(
   ex: Exercise,
   answers: string[],
+  promptMatch = "[Enter]",
 ): Promise<{ outcome: DrillOutcome; output: string; prompts: string }> {
   const fake = new PassThrough();
   const stdinDescriptor = Object.getOwnPropertyDescriptor(process, "stdin")!;
@@ -57,7 +61,7 @@ async function driveDrill(
     .mockImplementation(((chunk: unknown) => {
       if (typeof chunk === "string") {
         prompts.push(chunk);
-        if (chunk.includes("[Enter]")) {
+        if (chunk.includes(promptMatch)) {
           const next = queue.shift();
           if (next !== undefined) setImmediate(() => fake.write(`${next}\n`));
         }
@@ -199,4 +203,96 @@ describe.skipIf(!hasJdk())("runDrill - harness kinds", () => {
     expect(output).toContain("✗ increment() advances value()");
     expect(output).not.toContain("test #");
   }, 90_000);
+});
+
+const recallEx: RecallExercise = {
+  id: "rec-any-950",
+  kind: "recall",
+  axis: "decomposition",
+  language: "any",
+  tier: 1,
+  title: "two heads",
+  prompt: "Probability of two heads in two fair flips?",
+  softTimeLimitSeconds: 120,
+  testTimeoutMs: 10_000,
+  acceptedAnswers: ["1/4"],
+  reveal: "Two independent halves multiply.",
+};
+
+describe("runDrill - recall", () => {
+  it("scores an equivalent numeric answer via --solution and prints the reveal", async () => {
+    const { lines, restore } = captureLog();
+    let outcome: DrillOutcome;
+    try {
+      outcome = await runDrill(recallEx, solutionFile("25%\ntrailing junk is ignored\n"));
+    } finally {
+      restore();
+    }
+    expect(outcome.abandoned).toBe(false);
+    expect(outcome.passed).toBe(1);
+    expect(outcome.total).toBe(1);
+    expect(outcome.score).toBe(1);
+    const output = lines.join("\n");
+    expect(output).toContain("✓ correct");
+    expect(output).toContain("Two independent halves multiply.");
+  });
+
+  it("scores a wrong answer 0 and shows what was accepted", async () => {
+    const { lines, restore } = captureLog();
+    let outcome: DrillOutcome;
+    try {
+      outcome = await runDrill(recallEx, solutionFile("1/3\n"));
+    } finally {
+      restore();
+    }
+    expect(outcome.abandoned).toBe(false);
+    expect(outcome.passed).toBe(0);
+    expect(outcome.score).toBe(0);
+    expect(lines.join("\n")).toContain("Accepted: 1/4");
+  });
+
+  it("grades interactively and reveals the derivation", async () => {
+    const { outcome, output } = await driveDrill(recallEx, ["0.25"], "Your answer");
+    expect(outcome.passed).toBe(1);
+    expect(output).toContain("✓ correct");
+    expect(output).toContain("Two independent halves multiply.");
+  }, 30_000);
+
+  it("abandons on q without scoring or revealing the answer", async () => {
+    const { outcome, output } = await driveDrill(recallEx, ["q"], "Your answer");
+    expect(outcome.abandoned).toBe(true);
+    expect(outcome.passed).toBe(0);
+    expect(outcome.score).toBe(0);
+    // Quitting must not hand over the answer - the reveal is the reward for answering.
+    expect(output).not.toContain("Accepted: 1/4");
+    expect(output).not.toContain("Two independent halves multiply.");
+  }, 30_000);
+
+  it("survives an exercise with no reveal", async () => {
+    const { reveal: _reveal, ...noReveal } = recallEx;
+    const { lines, restore } = captureLog();
+    let outcome: DrillOutcome;
+    try {
+      outcome = await runDrill(noReveal, solutionFile("0.25\n"));
+    } finally {
+      restore();
+    }
+    expect(outcome.passed).toBe(1);
+    expect(lines.join("\n")).toContain("✓ correct");
+  });
+});
+
+describe("previewExercise - recall", () => {
+  it("explains that numeric forms are equivalent, and never leaks the answer", () => {
+    const { lines, restore } = captureLog();
+    try {
+      previewExercise(recallEx);
+    } finally {
+      restore();
+    }
+    const output = lines.join("\n");
+    expect(output).toContain("Probability of two heads");
+    expect(output).toMatch(/1\/4, 0\.25, 25%/);
+    expect(output).not.toContain("Two independent halves multiply.");
+  });
 });

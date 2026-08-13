@@ -8,13 +8,16 @@ import type {
   CodeLikeExercise,
   HarnessExercise,
   PredictExercise,
+  RecallExercise,
 } from "../bank/schema.js";
 import {
   grade,
   gradeCloze,
   gradePrediction,
+  gradeRecall,
   normalizeClozeAnswer,
   normalizeOutput,
+  normalizeRecallAnswer,
   solutionFileName,
   WHITESPACE_PARTIAL_CREDIT,
 } from "./grader.js";
@@ -522,6 +525,50 @@ describe("gradePrediction", () => {
   });
 });
 
+describe.skipIf(!hasJdk())("gradePrediction - java", () => {
+  const predictEx: PredictExercise = {
+    id: "cr-java-901",
+    kind: "predict-output",
+    axis: "code-reading",
+    language: "java",
+    tier: 1,
+    title: "int division",
+    prompt: "What does this print?",
+    softTimeLimitSeconds: 120,
+    testTimeoutMs: 30_000,
+    snippet: 'public class Main {\n    public static void main(String[] args) {\n        System.out.println(7 / 2);\n        System.out.println(7 % 2);\n    }\n}\n',
+  };
+
+  it("runs the snippet for ground truth and grades exactly", async () => {
+    const r = await gradePrediction(predictEx, scratch(), "3\n1");
+    expect(r.error).toBeUndefined();
+    expect(r.correct).toBe(true);
+  }, 60_000);
+});
+
+// Outside the JDK gate: the spawn fails before any JVM starts, so a host with no
+// JDK still exercises the java prediction path.
+describe("gradePrediction - java with no JDK", () => {
+  it("returns the install hint, not a raw spawn error", async () => {
+    const predictEx: PredictExercise = {
+      ...predictPy,
+      id: "cr-java-902",
+      language: "java",
+      snippet: "public class Main {\n    public static void main(String[] args) {\n        System.out.println(1);\n    }\n}\n",
+    };
+    const previous = process.env.ATROPHY_JAVA_HOME;
+    process.env.ATROPHY_JAVA_HOME = join(tmpdir(), "atrophy-no-such-jdk-home");
+    try {
+      const r = await gradePrediction(predictEx, scratch(), "1");
+      expect(r.correct).toBe(false);
+      expect(r.error).toMatch(/not found - Java drills need a JDK/);
+    } finally {
+      if (previous === undefined) delete process.env.ATROPHY_JAVA_HOME;
+      else process.env.ATROPHY_JAVA_HOME = previous;
+    }
+  });
+});
+
 const clozeEx: ClozeExercise = {
   id: "api-py-901",
   kind: "cloze",
@@ -547,5 +594,42 @@ describe("gradeCloze", () => {
   });
   it("collapses internal whitespace runs", () => {
     expect(normalizeClozeAnswer("lambda  w:  len(w)")).toBe("lambda w: len(w)");
+  });
+});
+
+describe("recall grading (pure, no JDK needed)", () => {
+  const recallEx: RecallExercise = {
+    id: "rec-any-901",
+    kind: "recall",
+    axis: "decomposition",
+    language: "any",
+    tier: 1,
+    title: "coin",
+    prompt: "Probability of two heads in two fair flips?",
+    softTimeLimitSeconds: 120,
+    testTimeoutMs: 10_000,
+    acceptedAnswers: ["1/4"],
+    reveal: "2 independent halves multiply.",
+  };
+
+  it("accepts 1/4, 0.25, 25%, and ' .25 ' as the same number", () => {
+    for (const answer of ["1/4", "0.25", "25%", " .25 ", "25 %"]) {
+      expect(gradeRecall(recallEx, answer), answer).toBe(true);
+    }
+    expect(gradeRecall(recallEx, "1/3")).toBe(false);
+    expect(gradeRecall(recallEx, "banana")).toBe(false);
+  });
+
+  it("compares non-numeric answers as case-insensitive collapsed text", () => {
+    const textEx: RecallExercise = { ...recallEx, acceptedAnswers: ["O(n log n)"] };
+    expect(gradeRecall(textEx, "o(n  log n)")).toBe(true);
+    expect(gradeRecall(textEx, "O(n^2)")).toBe(false);
+  });
+
+  it("normalizes percent and fraction forms to numbers", () => {
+    expect(normalizeRecallAnswer("25%").num).toBeCloseTo(0.25, 12);
+    expect(normalizeRecallAnswer("-3/6").num).toBeCloseTo(-0.5, 12);
+    expect(normalizeRecallAnswer("1e-3").num).toBeCloseTo(0.001, 12);
+    expect(normalizeRecallAnswer("n log n").num).toBeUndefined();
   });
 });

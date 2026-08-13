@@ -7,6 +7,7 @@ import type {
   HarnessExercise,
   OutlineExercise,
   PredictExercise,
+  RecallExercise,
 } from "../bank/schema.js";
 import {
   JAVA_COMPILE_TIMEOUT_MS,
@@ -355,15 +356,25 @@ export async function gradePrediction(
   dir: string,
   prediction: string,
 ): Promise<PredictionResult> {
-  const isPy = ex.language === "python";
-  const file = isPy ? "snippet.py" : "snippet.js";
+  // Java runs through the single-file source launcher (`java Main.java`): it compiles
+  // in memory, so there is no javac step and no .class litter. One file only - that is
+  // the launcher's limit, and predict-output snippets are single-file by design.
+  const file = ex.language === "python" ? "snippet.py" : ex.language === "java" ? "Main.java" : "snippet.js";
   writeFileSync(join(dir, file), ex.snippet, "utf8");
-  const cmd = isPy ? pythonCommand() : process.execPath;
+  const cmd =
+    ex.language === "python" ? pythonCommand() : ex.language === "java" ? javaCommand() : process.execPath;
+  const cmdArgs = ex.language === "java" ? [...JAVA_RUNTIME_FLAGS, file] : [file];
   let result;
   try {
-    result = await run(cmd, [file], { cwd: dir, timeoutMs: ex.testTimeoutMs });
+    result = await run(cmd, cmdArgs, { cwd: dir, timeoutMs: ex.testTimeoutMs });
   } catch (err) {
-    return { correct: false, credit: 0, whitespaceOnly: false, error: `could not start ${cmd}: ${(err as Error).message}` };
+    // A missing JDK is an install problem, not a broken exercise: say how to fix it,
+    // the same way compileAndRunJava does on the write/fix path.
+    const detail =
+      ex.language === "java"
+        ? `${missingJdkHint(cmd)} (${(err as Error).message})`
+        : `could not start ${cmd}: ${(err as Error).message}`;
+    return { correct: false, credit: 0, whitespaceOnly: false, error: detail };
   }
   if (result.timedOut || result.exitCode !== 0) {
     const detail = result.timedOut ? "timed out" : result.stderr.trim().slice(0, 500);
@@ -395,4 +406,32 @@ export function normalizeClozeAnswer(s: string): string {
 export function gradeCloze(ex: ClozeExercise, answer: string): boolean {
   const norm = normalizeClozeAnswer(answer);
   return ex.acceptedAnswers.some((a) => normalizeClozeAnswer(a) === norm);
+}
+
+/** Numeric-tolerant recall normalization: "1/4", "0.25", "25%" all mean 0.25. */
+export function normalizeRecallAnswer(s: string): { num?: number; text: string } {
+  const text = s.trim().toLowerCase().replace(/\s+/g, " ");
+  const compact = text.replace(/\s+/g, "");
+  const pct = /^(-?(?:\d+\.?\d*|\.\d+))%$/.exec(compact);
+  if (pct) return { num: Number.parseFloat(pct[1]!) / 100, text };
+  const frac = /^(-?(?:\d+\.?\d*|\.\d+))\/((?:\d+\.?\d*|\.\d+))$/.exec(compact);
+  if (frac) {
+    const denominator = Number.parseFloat(frac[2]!);
+    if (denominator !== 0) return { num: Number.parseFloat(frac[1]!) / denominator, text };
+  }
+  if (/^-?(?:\d+\.?\d*|\.\d+)(?:e-?\d+)?$/.test(compact)) {
+    return { num: Number.parseFloat(compact), text };
+  }
+  return { text };
+}
+
+export function gradeRecall(ex: RecallExercise, answer: string): boolean {
+  const given = normalizeRecallAnswer(answer);
+  return ex.acceptedAnswers.some((accepted) => {
+    const want = normalizeRecallAnswer(accepted);
+    if (given.num !== undefined && want.num !== undefined) {
+      return Math.abs(given.num - want.num) <= 1e-9 * Math.max(1, Math.abs(want.num));
+    }
+    return given.text === want.text;
+  });
 }
