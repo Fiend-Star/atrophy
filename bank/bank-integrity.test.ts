@@ -88,6 +88,29 @@ describe("bank integrity", () => {
   });
 });
 
+/**
+ * Kinds whose grading starts a JVM. The schema's 10s default `testTimeoutMs` is a
+ * flake factory once javac + JVM cold start are on the clock, so java content is
+ * held to a floor. Static JSON only - this lint spawns nothing and stays ungated.
+ */
+const JVM_KINDS = new Set(["write", "fix", "write-harness", "fix-harness", "predict-output"]);
+
+describe("java timeout floors", () => {
+  const javaJvm = bank.filter((ex) => ex.language === "java" && JVM_KINDS.has(ex.kind));
+
+  it("every JVM-spawning java exercise allows at least 20s", () => {
+    const bad = javaJvm.filter((ex) => ex.testTimeoutMs < 20_000);
+    expect(bad.map((ex) => `${ex.id}: ${ex.testTimeoutMs}`)).toEqual([]);
+  });
+
+  it("tier-3 harness drills allow at least 30s", () => {
+    // Harness drills run the exercise's own checks (threads, latches, watchdog) on top
+    // of compile + startup; the hardest tier needs the extra headroom.
+    const bad = javaJvm.filter((ex) => isHarness(ex) && ex.tier === 3 && ex.testTimeoutMs < 30_000);
+    expect(bad.map((ex) => `${ex.id}: ${ex.testTimeoutMs}`)).toEqual([]);
+  });
+});
+
 const javaCode = bank.filter(
   (e): e is CodeLikeExercise =>
     (e.kind === "write" || e.kind === "fix" || isHarness(e)) && e.language === "java",

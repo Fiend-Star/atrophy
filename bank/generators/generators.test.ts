@@ -8,6 +8,12 @@ import { allGenerators } from "./index.js";
 
 const SEEDS = ["a1b2c3", "000000", "ffffff"];
 
+/**
+ * Same floor bank-integrity.test.ts puts on static java content: grading these kinds
+ * pays javac + JVM cold start, which the schema's 10s default does not cover.
+ */
+const JVM_KINDS = new Set(["write", "fix", "write-harness", "fix-harness", "predict-output"]);
+
 const dirs: string[] = [];
 function scratch(): string {
   const d = mkdtempSync(join(tmpdir(), "atrophy-gen-"));
@@ -30,6 +36,9 @@ describe("generator contracts", () => {
           expect(a.tier).toBe(tier);
           expect(a.axis).toBe(g.axis);
           expect(a.language).toBe(g.language);
+          if (a.language === "java" && JVM_KINDS.has(a.kind)) {
+            expect(a.testTimeoutMs, `${g.family} tier ${tier}`).toBeGreaterThanOrEqual(20_000);
+          }
         }
       }
     }
