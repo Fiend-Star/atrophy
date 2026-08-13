@@ -21,6 +21,9 @@ const MAX_OUTPUT_BYTES = 256 * 1024;
  * Run a command in a subprocess with a hard timeout and capped output.
  * Grading runs untrusted-ish user code, so: no shell, no stdin, minimal env.
  * (Network isolation is not enforced in v1 - documented limitation.)
+ * (On win32 the minimal env is hygiene, not a security boundary: libuv
+ * force-inherits a fixed set of parent vars - USERPROFILE, USERNAME,
+ * LOGONSERVER, HOMEPATH, ... - into every child whatever we pass as env.)
  */
 export function run(
   cmd: string,
@@ -33,8 +36,9 @@ export function run(
     const env: Record<string, string> = {
       PATH: process.env.PATH ?? "",
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
-      // JVM (and others) resolve their temp dir from TEMP/TMP; without them Windows
-      // falls back to C:\Windows, which is not writable for user processes.
+      // The JVM resolves java.io.tmpdir from TMP, then TEMP (then USERPROFILE, then
+      // the unwritable Windows dir). libuv's force-inherit above happens to cover
+      // TEMP but not TMP; pass both explicitly rather than lean on that list.
       ...(process.platform === "win32" && process.env.TEMP ? { TEMP: process.env.TEMP } : {}),
       ...(process.platform === "win32" && process.env.TMP ? { TMP: process.env.TMP } : {}),
       // Graded output must decode the same way everywhere, so the child always gets
