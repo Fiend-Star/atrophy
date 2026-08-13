@@ -408,19 +408,29 @@ export function gradeCloze(ex: ClozeExercise, answer: string): boolean {
   return ex.acceptedAnswers.some((a) => normalizeClozeAnswer(a) === norm);
 }
 
-/** Numeric-tolerant recall normalization: "1/4", "0.25", "25%" all mean 0.25. */
+/**
+ * Numeric-tolerant recall normalization: "1/4", "0.25", "25%" all mean 0.25.
+ * A leading sign is optional everywhere a number can appear, exponents included -
+ * String(1e21) is "1e+21", so the + form is what a bank author pastes.
+ */
 export function normalizeRecallAnswer(s: string): { num?: number; text: string } {
   const text = s.trim().toLowerCase().replace(/\s+/g, " ");
   const compact = text.replace(/\s+/g, "");
-  const pct = /^(-?(?:\d+\.?\d*|\.\d+))%$/.exec(compact);
-  if (pct) return { num: Number.parseFloat(pct[1]!) / 100, text };
-  const frac = /^(-?(?:\d+\.?\d*|\.\d+))\/((?:\d+\.?\d*|\.\d+))$/.exec(compact);
+  // `num` means "the finite number this answer denotes". x/0 and overflow ("1e999")
+  // are deliberately left as text: Infinity makes the tolerance below Infinity too,
+  // which would accept every finite answer as a match.
+  const numeric = (num: number): { num?: number; text: string } =>
+    Number.isFinite(num) ? { num, text } : { text };
+
+  const pct = /^([+-]?(?:\d+\.?\d*|\.\d+))%$/.exec(compact);
+  if (pct) return numeric(Number.parseFloat(pct[1]!) / 100);
+  const frac = /^([+-]?(?:\d+\.?\d*|\.\d+))\/((?:\d+\.?\d*|\.\d+))$/.exec(compact);
   if (frac) {
     const denominator = Number.parseFloat(frac[2]!);
-    if (denominator !== 0) return { num: Number.parseFloat(frac[1]!) / denominator, text };
+    if (denominator !== 0) return numeric(Number.parseFloat(frac[1]!) / denominator);
   }
-  if (/^-?(?:\d+\.?\d*|\.\d+)(?:e-?\d+)?$/.test(compact)) {
-    return { num: Number.parseFloat(compact), text };
+  if (/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/.test(compact)) {
+    return numeric(Number.parseFloat(compact));
   }
   return { text };
 }
@@ -429,9 +439,12 @@ export function gradeRecall(ex: RecallExercise, answer: string): boolean {
   const given = normalizeRecallAnswer(answer);
   return ex.acceptedAnswers.some((accepted) => {
     const want = normalizeRecallAnswer(accepted);
+    // An answer typed exactly as the bank wrote it is right whatever normalization
+    // makes of it - including the forms that carry no number at all ("1/0", "O(n)").
+    if (given.text === want.text) return true;
     if (given.num !== undefined && want.num !== undefined) {
       return Math.abs(given.num - want.num) <= 1e-9 * Math.max(1, Math.abs(want.num));
     }
-    return given.text === want.text;
+    return false;
   });
 }

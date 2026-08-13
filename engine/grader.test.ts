@@ -632,4 +632,34 @@ describe("recall grading (pure, no JDK needed)", () => {
     expect(normalizeRecallAnswer("1e-3").num).toBeCloseTo(0.001, 12);
     expect(normalizeRecallAnswer("n log n").num).toBeUndefined();
   });
+
+  it("keeps the sign on plain decimals, not just on fractions", () => {
+    expect(normalizeRecallAnswer("-0.5").num).toBeCloseTo(-0.5, 12);
+    expect(normalizeRecallAnswer("-25%").num).toBeCloseTo(-0.25, 12);
+    const negative: RecallExercise = { ...recallEx, acceptedAnswers: ["-1/2"] };
+    expect(gradeRecall(negative, "-0.5")).toBe(true);
+    expect(gradeRecall(negative, "0.5")).toBe(false);
+  });
+
+  it("accepts an explicit + on integers and exponents", () => {
+    // String(1e21) is "1e+21", so a bank author pasting a computed value writes
+    // the + form; it has to mean the same number the user types without it.
+    expect(normalizeRecallAnswer("1e+3").num).toBeCloseTo(1000, 9);
+    expect(normalizeRecallAnswer("+5").num).toBe(5);
+    expect(gradeRecall({ ...recallEx, acceptedAnswers: ["1e+3"] }, "1000")).toBe(true);
+    expect(gradeRecall({ ...recallEx, acceptedAnswers: ["1000"] }, "1e+3")).toBe(true);
+  });
+
+  it("leaves an undefined fraction as text rather than Infinity", () => {
+    expect(normalizeRecallAnswer("1/0").num).toBeUndefined();
+    expect(gradeRecall({ ...recallEx, acceptedAnswers: ["1/0"] }, "1/0")).toBe(true);
+  });
+
+  it("accepts an answer typed exactly as written, even when it parses to Infinity", () => {
+    // Both sides parse to Infinity, whose difference is NaN, and every comparison
+    // with NaN is false - the numeric branch alone would reject a verbatim answer.
+    const huge: RecallExercise = { ...recallEx, acceptedAnswers: ["1e999"] };
+    expect(gradeRecall(huge, "1e999")).toBe(true);
+    expect(gradeRecall(huge, "12")).toBe(false);
+  });
 });
