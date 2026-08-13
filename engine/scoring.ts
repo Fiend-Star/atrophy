@@ -51,7 +51,10 @@ export function exerciseScore(
   softLimitSeconds: number,
 ): number {
   if (total <= 0) return 0;
-  return (passed / total) * timeFactor(elapsedSeconds, softLimitSeconds);
+  // Clamped, not trusted: exercise-supplied harnesses (testCode) report their own
+  // passed/total, so a buggy pack must not be able to inflate a rating past a perfect run.
+  const correctness = Math.min(1, Math.max(0, passed / total));
+  return correctness * timeFactor(elapsedSeconds, softLimitSeconds);
 }
 
 export interface RatingState {

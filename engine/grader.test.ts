@@ -2,7 +2,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ClozeExercise, CodeExercise, PredictExercise } from "../bank/schema.js";
+import type {
+  ClozeExercise,
+  CodeExercise,
+  CodeLikeExercise,
+  HarnessExercise,
+  PredictExercise,
+} from "../bank/schema.js";
 import {
   grade,
   gradeCloze,
@@ -50,7 +56,7 @@ const jsEx: CodeExercise = {
   starterCode: "function double(x) {}\nmodule.exports = { double };\n",
 };
 
-function writeSolution(dir: string, ex: CodeExercise, code: string): void {
+function writeSolution(dir: string, ex: CodeLikeExercise, code: string): void {
   writeFileSync(join(dir, solutionFileName(ex)), code, "utf8");
 }
 
@@ -253,6 +259,83 @@ describe.skipIf(!hasJdk())("grade - java type matrix", () => {
   }, 60_000);
 });
 
+const harnessEx: HarnessExercise = {
+  id: "conc-java-901",
+  kind: "write-harness",
+  axis: "syntax-recall",
+  language: "java",
+  tier: 3,
+  title: "counter",
+  prompt: "Make Counter.increment() thread-safe.",
+  softTimeLimitSeconds: 600,
+  testTimeoutMs: 30_000,
+  totalChecks: 2,
+  starterCode: "public class Solution {\n    private int n = 0;\n    public void increment() { n++; }\n    public int value() { return n; }\n}\n",
+  testCode: `public class Harness {
+    public static void main(String[] args) throws Exception {
+        Atrophy.plan(2);
+        Atrophy.watchdog(20_000);
+        Solution s = new Solution();
+        Thread[] ts = new Thread[4];
+        for (int i = 0; i < 4; i++) {
+            ts[i] = new Thread(() -> { for (int k = 0; k < 25_000; k++) s.increment(); });
+        }
+        for (Thread t : ts) t.start();
+        for (Thread t : ts) t.join();
+        Atrophy.check("100k increments survive 4 threads", s.value() == 100_000);
+        Atrophy.check("value() is non-negative", s.value() >= 0);
+        Atrophy.report();
+    }
+}`,
+};
+
+describe.skipIf(!hasJdk())("grade - java testCode", () => {
+  it("grades a correct solution via the exercise's own harness", async () => {
+    const dir = scratch();
+    writeSolution(dir, harnessEx, "public class Solution {\n    private int n = 0;\n    public synchronized void increment() { n++; }\n    public synchronized int value() { return n; }\n}\n");
+    const r = await grade(harnessEx, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(2);
+    expect(r.total).toBe(2);
+  }, 90_000);
+
+  it("fails the racy starter deterministically-shaped output (named check failures)", async () => {
+    const dir = scratch();
+    writeSolution(dir, harnessEx, harnessEx.starterCode);
+    const r = await grade(harnessEx, dir);
+    // the unsynchronized starter may occasionally pass the race by luck; the shape is what we assert
+    expect(r.total).toBe(2);
+    for (const f of r.failures) {
+      expect(f.error).toBeTruthy();
+      expect(f.args).toBeUndefined();
+    }
+  }, 90_000);
+
+  it("rejects a harness whose reported total differs from totalChecks", async () => {
+    const dir = scratch();
+    const lying: HarnessExercise = {
+      ...harnessEx,
+      id: "conc-java-902",
+      testCode: 'public class Harness { public static void main(String[] a) { System.out.println("ATROPHY_RESULT {\\"passed\\":7,\\"total\\":7,\\"failures\\":[]}"); } }',
+    };
+    writeSolution(dir, lying, lying.starterCode);
+    const r = await grade(lying, dir);
+    expect(r.harnessError).toMatch(/reported 7 checks but the exercise declares 2/);
+    expect(r.passed).toBe(0);
+  }, 90_000);
+
+  it("scores a deadlocked solution 0 with named failures via the watchdog", async () => {
+    const dir = scratch();
+    const deadlockEx: HarnessExercise = { ...harnessEx, id: "conc-java-903", testTimeoutMs: 60_000 };
+    writeSolution(dir, deadlockEx, "public class Solution {\n    public synchronized void increment() { while (true) {} }\n    public int value() { return 0; }\n}\n");
+    const r = await grade(deadlockEx, dir);
+    expect(r.harnessError).toBeUndefined(); // watchdog reported before the external timeout
+    expect(r.passed).toBe(0);
+    expect(r.total).toBe(2);
+    expect(r.failures.some((f) => /not reached|deadlock/i.test(f.error ?? ""))).toBe(true);
+  }, 120_000);
+});
+
 // Deliberately outside the JDK gate: both paths fail before javac is ever spawned,
 // so a host with no JDK still exercises part of the java grader.
 describe("grade - java failure paths that need no JDK", () => {
@@ -277,6 +360,15 @@ describe("grade - java failure paths that need no JDK", () => {
     const r = await grade(javaEx, join(scratch(), "never-created"));
     expect(r.passed).toBe(0);
     expect(r.total).toBe(3);
+    expect(r.harnessError).toMatch(/could not stage the Java harness/);
+  });
+
+  it("reports a staging failure for testCode exercises too", async () => {
+    // Same invariant on the harness path: writing Harness.java / copying Atrophy.java
+    // must not throw out of grade() and take the drill session down with it.
+    const r = await grade(harnessEx, join(scratch(), "never-created"));
+    expect(r.passed).toBe(0);
+    expect(r.total).toBe(harnessEx.totalChecks);
     expect(r.harnessError).toMatch(/could not stage the Java harness/);
   });
 });

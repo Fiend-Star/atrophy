@@ -39,6 +39,13 @@ describe("exerciseScore", () => {
   });
 });
 
+describe("exerciseScore clamp", () => {
+  it("never exceeds 1 even if passed > total (defense against buggy pack harnesses)", () => {
+    expect(exerciseScore(7, 5, 10, 300)).toBe(1);
+    expect(exerciseScore(-1, 5, 10, 300)).toBe(0);
+  });
+});
+
 describe("expectedScore", () => {
   it("is 0.5 against an equal-rated tier", () => {
     expect(expectedScore(1200, 2)).toBeCloseTo(0.5, 5);

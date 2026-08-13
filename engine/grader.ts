@@ -4,6 +4,7 @@ import type {
   ClozeExercise,
   CodeExercise,
   CodeLikeExercise,
+  HarnessExercise,
   OutlineExercise,
   PredictExercise,
 } from "../bank/schema.js";
@@ -19,8 +20,9 @@ import { run, type RunResult } from "./runner.js";
 
 export interface TestFailure {
   index: number;
-  args: unknown[];
-  expected: unknown;
+  /** Absent for exercise-supplied harnesses: an Atrophy check is a named assertion, not a call. */
+  args?: unknown[];
+  expected?: unknown;
   actual?: unknown;
   error?: string;
 }
@@ -220,10 +222,47 @@ async function gradeJavaTests(ex: CodeExercise, dir: string): Promise<GradeResul
 }
 
 /**
+ * Java behavioral drills: the exercise ships its own `public class Harness`, compiled
+ * alongside the solution and the Atrophy helper. The harness owns what "passing" means
+ * (races, deadlocks, invariants), so the only thing we police is that it graded the
+ * number of checks the exercise declared.
+ */
+async function gradeHarness(ex: HarnessExercise, dir: string): Promise<GradeResult> {
+  const total = ex.totalChecks;
+  try {
+    writeFileSync(join(dir, "Harness.java"), ex.testCode, "utf8");
+    copyFileSync(join(javaResourceDir(), "Atrophy.java"), join(dir, "Atrophy.java"));
+  } catch (err) {
+    // Same contract as gradeJavaTests: the drill loop has no catch, so a broken
+    // install must come back as a result instead of ending the session.
+    return { passed: 0, total, failures: [], harnessError: `could not stage the Java harness: ${(err as Error).message}` };
+  }
+  const outcome = await compileAndRunJava(
+    dir,
+    ["Solution.java", "Harness.java", "Atrophy.java"],
+    "Harness",
+    total,
+    ex.testTimeoutMs,
+  );
+  if ("error" in outcome) return outcome.error;
+  const parsed = parseMarker(outcome.result, total, ex.testTimeoutMs);
+  if (!parsed.harnessError && parsed.total !== ex.totalChecks) {
+    return {
+      passed: 0,
+      total,
+      failures: [],
+      harnessError: `exercise bug: harness reported ${parsed.total} checks but the exercise declares ${ex.totalChecks} - please report this exercise`,
+    };
+  }
+  return parsed;
+}
+
+/**
  * Grade the solution file sitting in `dir` against the exercise's hidden tests.
  * Writes the language harness next to it and runs it in a subprocess.
  */
-export async function grade(ex: CodeExercise, dir: string): Promise<GradeResult> {
+export async function grade(ex: CodeLikeExercise, dir: string): Promise<GradeResult> {
+  if (ex.kind === "write-harness" || ex.kind === "fix-harness") return gradeHarness(ex, dir);
   if (ex.language === "java") return gradeJavaTests(ex, dir);
 
   const isPy = ex.language === "python";

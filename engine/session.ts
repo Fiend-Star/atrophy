@@ -7,7 +7,7 @@ import pc from "picocolors";
 import {
   totalUnits,
   type ClozeExercise,
-  type CodeExercise,
+  type CodeLikeExercise,
   type Exercise,
   type OutlineExercise,
   type PredictExercise,
@@ -46,6 +46,8 @@ export async function runDrill(
   switch (ex.kind) {
     case "write":
     case "fix":
+    case "write-harness":
+    case "fix-harness":
       return codeDrill(ex, solutionOverride);
     case "predict-output":
       return predictDrill(ex, solutionOverride);
@@ -55,9 +57,6 @@ export async function runDrill(
       return outlineDrill(ex, solutionOverride);
     case "recall":
       throw new Error("recall drills are not implemented yet (lands in a later task)");
-    case "write-harness":
-    case "fix-harness":
-      throw new Error("harness drills are not implemented yet (lands in a later task)");
   }
 }
 
@@ -93,6 +92,8 @@ export function previewExercise(ex: Exercise): void {
   switch (ex.kind) {
     case "write":
     case "fix":
+    case "write-harness":
+    case "fix-harness":
       console.log(pc.dim("starter code:"));
       console.log(ex.starterCode.trim());
       break;
@@ -190,18 +191,23 @@ async function readMultiline(rl: Interface): Promise<string> {
 
 // ---------- write / fix (editor + hidden tests) ----------
 
-function commentPrefix(ex: CodeExercise): string {
+function commentPrefix(ex: CodeLikeExercise): string {
   return ex.language === "python" ? "#" : "//";
 }
 
-function buildSolutionFile(ex: CodeExercise): string {
+/** fix-shaped kinds hand the user buggy code; write-shaped kinds hand them a blank slate. */
+function isFixKind(ex: CodeLikeExercise): boolean {
+  return ex.kind === "fix" || ex.kind === "fix-harness";
+}
+
+function buildSolutionFile(ex: CodeLikeExercise): string {
   const c = commentPrefix(ex);
   const promptLines = ex.prompt
     .trim()
     .split("\n")
     .map((l) => `${c} ${l}`.trimEnd())
     .join("\n");
-  const task = ex.kind === "fix" ? "Find and fix the bug below" : ex.title;
+  const task = isFixKind(ex) ? "Find and fix the bug below" : ex.title;
   return `${c} ${task}  [${ex.axis} / tier ${ex.tier} / ${ex.language}]
 ${c}
 ${promptLines}
@@ -219,6 +225,12 @@ function printFailures(result: GradeResult): void {
     return;
   }
   for (const f of result.failures.slice(0, 3)) {
+    // Exercise-supplied harnesses report named checks, not call/expected pairs:
+    // their index is a failure-list ordinal, so "test #N" would be a lie.
+    if (f.args === undefined) {
+      console.log(pc.red(`\n✗ ${f.error ?? "check failed"}`));
+      continue;
+    }
     if (f.index === -1) {
       console.log(pc.red("\nCould not load your solution:"));
       console.log(pc.dim(f.error ?? "unknown error"));
@@ -233,7 +245,7 @@ function printFailures(result: GradeResult): void {
   if (hidden > 0) console.log(pc.dim(`  …and ${hidden} more failing test(s)`));
 }
 
-async function codeDrill(ex: CodeExercise, solutionOverride?: string): Promise<DrillOutcome> {
+async function codeDrill(ex: CodeLikeExercise, solutionOverride?: string): Promise<DrillOutcome> {
   return withScratchDir(async (dir) => {
     const file = join(dir, solutionFileName(ex));
     writeFileSync(file, buildSolutionFile(ex), "utf8");
@@ -250,7 +262,7 @@ async function codeDrill(ex: CodeExercise, solutionOverride?: string): Promise<D
 
     printHeader(ex);
     const opened = openEditor(file);
-    printEditorInstructions(file, opened, ex.kind === "fix" ? "the fix" : "your solution");
+    printEditorInstructions(file, opened, isFixKind(ex) ? "the fix" : "your solution");
     printTimer(ex);
 
     const initialContent = buildSolutionFile(ex);
@@ -285,6 +297,17 @@ async function codeDrill(ex: CodeExercise, solutionOverride?: string): Promise<D
 
         const result = await grade(ex, dir);
         const passed = result.harnessError ? 0 : result.passed;
+        // Whiteboard mode: one graded submission, no fix-and-resubmit loop.
+        // submitPolicy has no schema default, so "not single" is the loop, not "loop".
+        if (ex.submitPolicy === "single") {
+          if (passed === result.total) {
+            console.log(pc.green(`\n✓ ${passed}/${result.total} tests passed`) + pc.dim(` in ${Math.round(elapsed())}s`));
+          } else {
+            console.log(pc.red(`\n${passed}/${result.total} tests passed.`) + pc.dim("  whiteboard mode: single submission, no retries"));
+            printFailures(result);
+          }
+          return makeOutcome(ex, passed, elapsed());
+        }
         if (passed === result.total) {
           console.log(pc.green(`\n✓ ${passed}/${result.total} tests passed`) + pc.dim(` in ${Math.round(elapsed())}s`));
           return makeOutcome(ex, passed, elapsed());
