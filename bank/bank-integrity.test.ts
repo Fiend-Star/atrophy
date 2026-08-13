@@ -12,7 +12,9 @@ const here = fileURLToPath(new URL(".", import.meta.url));
 /**
  * Any bank dir can be validated, not just the built-in one - this is how a pack
  * gets checked before it is trusted: `ATROPHY_BANK=<pack-dir> npx vitest run
- * bank/bank-integrity.test.ts` (same env var, same full-replace meaning as the CLI).
+ * bank/bank-integrity.test.ts`. Like the CLI, the variable replaces the bank rather
+ * than adding to it; unlike the CLI, an empty value is not read as "unset" - it
+ * fails loudly here instead of silently validating the built-in bank.
  */
 const bankRoot = process.env.ATROPHY_BANK ?? join(here, "exercises");
 const bank = loadBank(bankRoot);
@@ -35,6 +37,13 @@ afterAll(() => {
 });
 
 describe("bank integrity", () => {
+  it("the bank root holds exercises at all", () => {
+    // An existing-but-exercise-less dir loads as [] without throwing, and every loop
+    // below then passes by iterating nothing: a pack author would read that green as
+    // "my pack is valid". This is the one check no bank of any shape may skip.
+    expect(bank.length, `no exercises found under ${bankRoot}`).toBeGreaterThan(0);
+  });
+
   it("every fix exercise ships a bug that actually fails at least one test", async () => {
     const fixes = nonJava.filter((e) => e.kind === "fix");
     // The built-in bank losing its fixes would silently make this test vacuous. A pack
