@@ -183,6 +183,11 @@ function parseMarker(result: RunResult, total: number, timeoutMs: number): Grade
   // and reads .args off each element - a null entry would throw there, mid-drill.
   return {
     ...graded,
+    // `passed` becomes a score and a stored column, so it has to be a number on every
+    // language path, not just the harness one: an absent or non-numeric count reaching
+    // recordSession as undefined throws on the better-sqlite3 bind and loses a rep the
+    // user already earned. Non-finite is not evidence of anything - it scores 0.
+    passed: Number.isFinite(graded.passed) ? graded.passed : 0,
     failures: Array.isArray(graded.failures)
       ? graded.failures.filter((f) => f !== null && typeof f === "object")
       : [],

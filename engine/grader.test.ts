@@ -134,6 +134,36 @@ describe("grade - javascript", () => {
   });
 });
 
+// The engine-generated harnesses always print a numeric `passed`, so the only way to
+// reach parseMarker with a broken one is a solution that prints its own marker line
+// and exits before the harness can print the real one. `passed: undefined` would ride
+// out of the drill and into recordSession, where better-sqlite3 throws on the bind -
+// the rep is lost after the user already did the work.
+describe("grade - a solution that forges its own marker line", () => {
+  it("scores a marker with no passed count as a finite 0 (python)", async () => {
+    const dir = scratch();
+    // sys.exit raises SystemExit, which the harness's `except Exception` does not
+    // catch: the interpreter exits 0 and the forged line is the last marker on stdout.
+    writeSolution(dir, pyEx, 'import sys\nprint("ATROPHY_RESULT {}")\nsys.exit(0)\n');
+    const r = await grade(pyEx, dir);
+    expect(Number.isFinite(r.passed)).toBe(true);
+    expect(r.passed).toBe(0);
+  });
+
+  it("scores a marker with a non-numeric passed as a finite 0 (javascript)", async () => {
+    const dir = scratch();
+    // writeSync(1, …) is flushed before process.exit can truncate it.
+    writeSolution(
+      dir,
+      jsEx,
+      'require("node:fs").writeSync(1, \'ATROPHY_RESULT {"passed":"three","total":3}\\n\');\nprocess.exit(0);\n',
+    );
+    const r = await grade(jsEx, dir);
+    expect(Number.isFinite(r.passed)).toBe(true);
+    expect(r.passed).toBe(0);
+  });
+});
+
 const javaEx: CodeExercise = {
   id: "sr-java-901",
   kind: "write",
