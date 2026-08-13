@@ -1,3 +1,5 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -183,5 +185,36 @@ describe("loadBank", () => {
     expect(bank.length).toBeGreaterThanOrEqual(6);
     const ids = bank.map((e) => e.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("loadBank multi-dir", () => {
+  function tempBank(files: Record<string, object>): string {
+    const dir = mkdtempSync(join(tmpdir(), "atrophy-bank-"));
+    for (const [name, ex] of Object.entries(files)) {
+      writeFileSync(join(dir, name), JSON.stringify(ex), "utf8");
+    }
+    return dir;
+  }
+  it("merges several directories", () => {
+    const a = tempBank({ "a.json": valid });
+    const b = tempBank({ "b.json": { ...valid, id: "sr-py-002" } });
+    try {
+      const bank = loadBank([a, b]);
+      expect(bank.map((e) => e.id).sort()).toEqual(["sr-py-001", "sr-py-002"]);
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
+    }
+  });
+  it("fails loudly on duplicate ids across directories, naming both files", () => {
+    const a = tempBank({ "a.json": valid });
+    const b = tempBank({ "b.json": valid });
+    try {
+      expect(() => loadBank([a, b])).toThrowError(/duplicate exercise id: sr-py-001.*a\.json.*b\.json/s);
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
+    }
   });
 });

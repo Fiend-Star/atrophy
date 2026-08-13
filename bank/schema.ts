@@ -163,22 +163,24 @@ export function parseExercise(json: string, source = "<inline>"): Exercise {
   return result.data;
 }
 
-/** Recursively load every *.json exercise under a bank directory. */
-export function loadBank(dir: string): Exercise[] {
+/** Recursively load every *.json exercise under one or more bank directories. */
+export function loadBank(dirs: string | string[]): Exercise[] {
+  const roots = Array.isArray(dirs) ? dirs : [dirs];
   const exercises: Exercise[] = [];
-  const seen = new Set<string>();
+  const seen = new Map<string, string>(); // id -> first file that declared it
   const walk = (d: string) => {
     for (const entry of readdirSync(d, { withFileTypes: true })) {
       const full = join(d, entry.name);
       if (entry.isDirectory()) walk(full);
       else if (entry.isFile() && entry.name.endsWith(".json")) {
         const ex = parseExercise(readFileSync(full, "utf8"), full);
-        if (seen.has(ex.id)) throw new BankError(`duplicate exercise id: ${ex.id}`);
-        seen.add(ex.id);
+        const first = seen.get(ex.id);
+        if (first) throw new BankError(`duplicate exercise id: ${ex.id} (${first} and ${full})`);
+        seen.set(ex.id, full);
         exercises.push(ex);
       }
     }
   };
-  walk(dir);
+  for (const root of roots) walk(root);
   return exercises;
 }
