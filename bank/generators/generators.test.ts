@@ -210,22 +210,25 @@ const javaGenerators = allGenerators.filter((g) => g.language === "java");
  */
 if (!hasJdk()) console.warn("⚠ JDK not found - java generator families NOT validated. Install JDK 21.");
 describe.skipIf(!hasJdk())("generator contracts - java", () => {
-  it("every generated java fix starter fails at least one of its own tests", async () => {
+  it("every generated java fix/fix-harness starter fails at least one of its own checks", async () => {
     // Several seeds per tier, not one: the archetype a variant plants is a seed
-    // choice, so a single seed would leave whole planted bugs ungraded.
+    // choice, so a single seed would leave whole planted bugs ungraded. Harness kinds
+    // are held to the same invariant as the static bank holds them to - narrowing this
+    // to `fix` would let a future fix-harness family through while the count guard
+    // below stayed green off dbg-java-scan alone.
     let graded = 0;
     for (const g of javaGenerators) {
       for (const tier of g.tiers) {
         for (const seed of SEEDS) {
           const ex = g.generate(seed, tier);
-          if (ex.kind !== "fix") continue;
+          if (ex.kind !== "fix" && ex.kind !== "fix-harness") continue;
           const dir = scratch();
           writeFileSync(join(dir, solutionFileName(ex)), ex.starterCode, "utf8");
           const r = await grade(ex, dir);
           // grade() compiles before it runs, so this also proves the buggy starter
           // is a *semantic* bug: a javac error would arrive here as a harnessError.
           expect(r.harnessError, `${g.family} t${tier} ${seed}: ${r.harnessError}`).toBeUndefined();
-          expect(r.passed, `${g.family} t${tier} ${seed}: planted bug passes all tests`).toBeLessThan(r.total);
+          expect(r.passed, `${g.family} t${tier} ${seed}: planted bug passes all checks`).toBeLessThan(r.total);
           graded++;
         }
       }
@@ -233,15 +236,16 @@ describe.skipIf(!hasJdk())("generator contracts - java", () => {
     expect(graded, "no generated java fix exercises were graded").toBeGreaterThan(0);
   }, 300_000);
 
-  it("every generated java write starter compiles", async () => {
+  it("every generated java write/write-harness starter compiles", async () => {
     // A write starter is never graded before the user edits it, so nothing else in the
     // suite would ever hand it to javac - a broken one would first surface as javac
-    // vomit on a real drill's first submit.
+    // vomit on a real drill's first submit. Same for a write-harness starter, which the
+    // fix loop above skips for exactly that reason: it has no planted bug to fail on.
     let compiled = 0;
     for (const g of javaGenerators) {
       for (const tier of g.tiers) {
         const ex = g.generate("9a8b7c", tier);
-        if (ex.kind !== "write") continue;
+        if (ex.kind !== "write" && ex.kind !== "write-harness") continue;
         const dir = scratch();
         const file = solutionFileName(ex);
         writeFileSync(join(dir, file), ex.starterCode, "utf8");
