@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ExerciseGenerator } from "../bank/generators/types.js";
 import type { Exercise } from "../bank/schema.js";
-import { familyOf, resolveExercise, selectExercise, targetTier } from "./select.js";
+import { availableAxes, familyOf, resolveExercise, selectExercise, targetTier } from "./select.js";
 
 function ex(id: string, tier: number, language: "python" | "javascript" = "python"): Exercise {
   return {
@@ -164,5 +164,16 @@ describe("selectExercise", () => {
 
   it("returns undefined for an axis with no material", () => {
     expect(selectExercise({ statics, axis: "debugging", rating: 1200 })).toBeUndefined();
+  });
+});
+
+describe("availableAxes", () => {
+  const mk = (axis: string, language: string) =>
+    ({ id: `x-${axis}-${language}`, kind: "cloze", axis, language, tier: 1, title: "t", prompt: "p", softTimeLimitSeconds: 60, testTimeoutMs: 10_000, snippet: "____", acceptedAnswers: ["a"] }) as unknown as Exercise;
+  const bank = [mk("api-memory", "java"), mk("code-reading", "python"), { ...(mk("decomposition", "any") as object), kind: "outline", rubric: ["r"] } as unknown as Exercise];
+  it("filters axes by language, counting language-any exercises for every filter", () => {
+    expect(availableAxes(bank, "java")).toEqual(["api-memory", "decomposition"]);
+    expect(availableAxes(bank, "python")).toEqual(["code-reading", "decomposition"]);
+    expect(availableAxes(bank)).toEqual(["code-reading", "api-memory", "decomposition"]);
   });
 });

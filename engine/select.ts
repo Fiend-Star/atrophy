@@ -1,5 +1,5 @@
 import type { ExerciseGenerator } from "../bank/generators/types.js";
-import type { Axis, Exercise, Language } from "../bank/schema.js";
+import { AXES, type Axis, type Exercise, type Language } from "../bank/schema.js";
 import { hexSeed, type Rng } from "./rng.js";
 import { expectedScore } from "./scoring.js";
 
@@ -123,4 +123,13 @@ export function selectExercise(opts: SelectOptions): Exercise | undefined {
     return useStatics[useStatics.length - 1];
   }
   return undefined;
+}
+
+/** Axes that actually have content for the given language ("any" counts for every language). */
+export function availableAxes(bank: Exercise[], language?: Language): Axis[] {
+  return AXES.filter((axis) =>
+    bank.some(
+      (e) => e.axis === axis && (language === undefined || e.language === language || e.language === "any"),
+    ),
+  );
 }

@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import pc from "picocolors";
 import { allGenerators } from "../bank/generators/index.js";
-import { AXES, loadBank, type Axis, type Exercise, type Language } from "../bank/schema.js";
+import { AXES, LANGUAGES, loadBank, type Axis, type Exercise, type Language } from "../bank/schema.js";
 import { buildPayload, startServer } from "./serve.js";
 import { autoSync, isRegistered, maybePrintPublishHint, publishCommand } from "./publish.js";
+import { configPath, packDirs } from "./config.js";
 import { detectAssistants } from "../engine/guard.js";
-import { resolveExercise, selectExercise } from "../engine/select.js";
+import { availableAxes, resolveExercise, selectExercise } from "../engine/select.js";
 import { previewExercise, runDrill } from "../engine/session.js";
 import { computeStreak } from "../engine/streak.js";
 import { detectRegression, detectRegressions, type Regression } from "../engine/regression.js";
@@ -26,15 +27,27 @@ import { reportCommand } from "./report.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-function bankDir(): string {
-  if (process.env.ATROPHY_BANK) return process.env.ATROPHY_BANK;
-  const candidates = [
-    join(__dirname, "..", "bank", "exercises"), // tsx dev: cli/../bank
-    join(__dirname, "..", "..", "bank", "exercises"), // built: dist/cli/../../bank
-  ];
-  const found = candidates.find((c) => existsSync(c));
-  if (!found) throw new Error("exercise bank not found - set ATROPHY_BANK");
-  return found;
+/** The built-in bank first, then any configured packs merged on top of it. */
+function bankDirs(): string[] {
+  const base = (() => {
+    if (process.env.ATROPHY_BANK) return process.env.ATROPHY_BANK;
+    const candidates = [
+      join(__dirname, "..", "bank", "exercises"), // tsx dev: cli/../bank
+      join(__dirname, "..", "..", "bank", "exercises"), // built: dist/cli/../../bank
+    ];
+    const found = candidates.find((c) => existsSync(c));
+    if (!found) throw new Error("exercise bank not found - set ATROPHY_BANK");
+    return found;
+  })();
+  // a pack pointing at the built-in bank is already covered by base; loadBank
+  // tolerates the overlap, but pack counts read cleaner without it
+  const packs = packDirs().filter((p) => resolve(p) !== resolve(base));
+  for (const p of packs) {
+    if (!existsSync(p)) {
+      throw new Error(`pack directory not found: ${p} (check ATROPHY_PACKS / "packs" in ${configPath()})`);
+    }
+  }
+  return [base, ...packs];
 }
 
 interface DrillFlags {
@@ -55,9 +68,17 @@ function parseAxis(value: string): Axis {
   return value as Axis;
 }
 
+function parseLang(value: string): Language {
+  if (!(LANGUAGES as readonly string[]).includes(value)) {
+    console.error(pc.red(`unknown language "${value}" - one of: ${LANGUAGES.join(", ")}`));
+    process.exit(1);
+  }
+  return value as Language;
+}
+
 /** The axis most in need of a rep: never-tested first, then stalest. */
 function dueAxis(store: Store, bank: Exercise[]): Axis {
-  const available = AXES.filter((a) => bank.some((ex) => ex.axis === a));
+  const available = availableAxes(bank);
   let best: Axis = available[0] ?? "syntax-recall";
   let bestTime = Infinity;
   for (const a of available) {
@@ -72,8 +93,8 @@ function dueAxis(store: Store, bank: Exercise[]): Axis {
 }
 
 async function drillOnce(store: Store, flags: DrillFlags): Promise<boolean> {
-  const bank = loadBank(bankDir());
-  const language = flags.lang as Language | undefined;
+  const bank = loadBank(bankDirs());
+  const language = flags.lang ? parseLang(flags.lang) : undefined;
   const mode = flags.aiOn ? "ai-on" : "ai-off";
 
   let ex: Exercise | undefined;
@@ -289,8 +310,9 @@ function exportJson(store: Store, out?: string): void {
 }
 
 async function baseline(store: Store, flags: DrillFlags): Promise<void> {
-  const bank = loadBank(bankDir());
-  const axesWithExercises = AXES.filter((a) => bank.some((ex) => ex.axis === a));
+  const bank = loadBank(bankDirs());
+  const language = flags.lang ? parseLang(flags.lang) : undefined;
+  const axesWithExercises = availableAxes(bank, language);
   console.log(
     pc.bold("Baseline session") +
       ` - one unaided drill per axis (${axesWithExercises.length} available today).`,
@@ -325,7 +347,7 @@ program
   .command("drill")
   .description("run one unaided micro-drill (5-10 min)")
   .option("-a, --axis <axis>", `skill axis: ${AXES.join(", ")}`)
-  .option("-l, --lang <language>", "python or javascript")
+  .option("-l, --lang <language>", `one of: ${LANGUAGES.join(", ")}`)
   .option("--ai-on", "monthly comparison rep WITH your AI tools (plots the gap, never touches your unaided rating)")
   .option("--solution <file>", "non-interactive: grade this file as the submission (scripting/tests)")
   .option("--exercise <id>", "replay a specific exercise (bank id or generated family-seed id)")
@@ -344,7 +366,7 @@ program
 program
   .command("baseline")
   .description("initial ~25 min session: one drill per axis, AI off")
-  .option("-l, --lang <language>", "python or javascript")
+  .option("-l, --lang <language>", `one of: ${LANGUAGES.join(", ")}`)
   .action(async (flags: DrillFlags) => {
     const store = new Store();
     try {
@@ -410,9 +432,9 @@ program
   .command("doctor")
   .description("diagnose your setup: runtime, editor, sandbox, exercise bank, database")
   .action(async () => {
-    let bd: string | null;
+    let bd: string[] | null;
     try {
-      bd = bankDir();
+      bd = bankDirs();
     } catch {
       bd = null;
     }

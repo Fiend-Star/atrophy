@@ -87,8 +87,8 @@ export function checkDb(path: string): CheckResult {
   }
 }
 
-/** The exercise bank loads and is non-empty. */
-export function checkBank(dir: string | null): CheckResult {
+/** The exercise bank (base dir plus any packs merged on top) loads and is non-empty. */
+export function checkBank(dir: string | string[] | null): CheckResult {
   if (!dir) {
     return { name: "Exercise bank", status: "fail", detail: "bank directory not found (set $ATROPHY_BANK)" };
   }
@@ -166,7 +166,7 @@ export function printResult(r: CheckResult): void {
 }
 
 export interface DoctorDeps {
-  bankDir: string | null;
+  bankDir: string | string[] | null;
   dbPath: string;
 }
 
