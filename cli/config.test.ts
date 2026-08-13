@@ -76,6 +76,21 @@ describe("packDirs", () => {
     expect(packDirs(env)).toEqual(expected);
   });
 
+  it("ignores a malformed config packs value instead of spreading it per character", () => {
+    // hand-edited config: a bare string where an array belongs
+    withConfig(JSON.stringify({ packs: "C:/packs/deshaw" }));
+    const env = { ...process.env };
+    delete env.ATROPHY_PACKS;
+    expect(packDirs(env)).toEqual([]);
+  });
+
+  it("skips non-string entries in config packs", () => {
+    withConfig(JSON.stringify({ packs: [42, null, "/from/config"] }));
+    const env = { ...process.env };
+    delete env.ATROPHY_PACKS;
+    expect(packDirs(env)).toEqual([resolve("/from/config")]);
+  });
+
   it("passes a not-yet-existing directory through resolved instead of throwing", () => {
     withConfig("{}");
     const missing = join(tmpdir(), "atrophy-pack-does-not-exist", "sub");

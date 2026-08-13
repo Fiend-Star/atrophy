@@ -44,9 +44,14 @@ function canonical(p: string): string {
 /** Additive pack directories: ATROPHY_PACKS (path-delimiter separated) then config packs. */
 export function packDirs(env: NodeJS.ProcessEnv = process.env): string[] {
   const fromEnv = (env.ATROPHY_PACKS ?? "").split(delimiter);
+  // a hand-edited config can hold anything; a bare string here would otherwise
+  // spread one character per pack dir
+  const configured: unknown = readConfig().packs;
+  const fromConfig: unknown[] = Array.isArray(configured) ? configured : [];
   const seen = new Set<string>();
   const dirs: string[] = [];
-  for (const raw of [...fromEnv, ...(readConfig().packs ?? [])]) {
+  for (const raw of [...fromEnv, ...fromConfig]) {
+    if (typeof raw !== "string") continue;
     const trimmed = raw.trim();
     // a blank entry would resolve to the cwd and hand the whole repo to loadBank
     if (!trimmed) continue;
