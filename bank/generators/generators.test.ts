@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { grade, gradePrediction, solutionFileName } from "../../engine/grader.js";
 import { JAVA_COMPILE_TIMEOUT_MS, hasJdk, javacCommand } from "../../engine/javatool.js";
 import { run } from "../../engine/runner.js";
-import { isCode, type CodeExercise, type PredictExercise } from "../schema.js";
+import { isCode, isHarness, type CodeExercise, type PredictExercise } from "../schema.js";
 import { allGenerators } from "./index.js";
 
 const SEEDS = ["a1b2c3", "000000", "ffffff"];
@@ -26,6 +26,13 @@ afterAll(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
+/** The `int[] nums = {...}` literal a java trace snippet walks, as numbers. */
+function seededArray(snippet: string): number[] {
+  const m = /int\[\] nums = \{([^}]*)\};/.exec(snippet);
+  if (!m) throw new Error(`no seeded int[] literal in snippet:\n${snippet}`);
+  return m[1]!.split(",").map((s) => Number(s.trim()));
+}
+
 describe("generator contracts", () => {
   it("every generator is deterministic and schema-valid for every tier and seed", () => {
     for (const g of allGenerators) {
@@ -40,6 +47,12 @@ describe("generator contracts", () => {
           expect(a.language).toBe(g.language);
           if (a.language === "java" && JVM_KINDS.has(a.kind)) {
             expect(a.testTimeoutMs, `${g.family} tier ${tier}`).toBeGreaterThanOrEqual(20_000);
+            // Same tier-3 harness clause bank-integrity puts on static java content:
+            // the exercise's own checks run on top of compile + startup, and the
+            // hardest tier needs the headroom. Vacuous until a family emits them.
+            if (isHarness(a) && a.tier === 3) {
+              expect(a.testTimeoutMs, `${g.family} tier ${tier}`).toBeGreaterThanOrEqual(30_000);
+            }
           }
         }
       }
@@ -77,7 +90,9 @@ describe("generator contracts", () => {
   }, 120_000);
 
   it("predict-output generators produce runnable, deterministic snippets", async () => {
-    const predicts = allGenerators.filter((g) => g.axis === "code-reading");
+    // Java families get the same invariant under the JDK gate at the bottom of this
+    // file; this loop spawns python/node only, so it stays runnable without a JDK.
+    const predicts = allGenerators.filter((g) => g.axis === "code-reading" && g.language !== "java");
     expect(predicts.length).toBeGreaterThan(0);
     for (const g of predicts) {
       for (const tier of g.tiers) {
@@ -126,6 +141,49 @@ describe("generator contracts", () => {
     // future change made them all land on one archetype, the other archetype's planted
     // bug would stop being graded anywhere, silently.
     expect([...onGradedSeeds].sort()).toEqual(["countMatches", "maxOf"]);
+  });
+
+  it("cr-java-trace renders snippets whose output is deterministic by construction", () => {
+    const gen = allGenerators.find((g) => g.family === "cr-java-trace")!;
+    // Constructs whose output depends on the machine, the locale, or the run. Ground
+    // truth for a predict-output drill is whatever the snippet printed the one time the
+    // grader ran it, so a nondeterministic snippet marks a correct answer wrong. The
+    // lookbehind lets LinkedHashMap through - it iterates in insertion order - while a
+    // bare HashMap, whose iteration order is unspecified, fails.
+    const banned = [
+      /(?<![A-Za-z])HashMap/,
+      /printf|String\.format/,
+      /random/i, // Math.random, new Random(, ThreadLocalRandom
+      /Thread|currentTimeMillis|nanoTime|Instant|LocalDate|hashCode/,
+    ];
+    for (const tier of gen.tiers) {
+      for (const seed of [...SEEDS, "111111", "222222", "333333"]) {
+        const ex = gen.generate(seed, tier);
+        expect(ex.kind).toBe("predict-output");
+        expect(ex.language).toBe("java");
+        if (ex.kind !== "predict-output") throw new Error("unreachable");
+        // Predict-output java runs through the single-file source launcher as Main.java.
+        expect(ex.snippet).toContain("public class Main");
+        expect(ex.snippet).not.toContain("package ");
+        expect(ex.testTimeoutMs).toBeGreaterThanOrEqual(20_000);
+        for (const re of banned) expect(ex.snippet, `${ex.id} t${tier}: ${re}`).not.toMatch(re);
+
+        const nums = seededArray(ex.snippet);
+        expect(nums.length, `${ex.id}: array is not 4-6 elements`).toBeGreaterThanOrEqual(4);
+        expect(nums.length, `${ex.id}: array is not 4-6 elements`).toBeLessThanOrEqual(6);
+        if (tier === 2) {
+          expect(ex.snippet).toContain("TreeMap");
+          expect(ex.snippet).toContain("LinkedHashMap");
+          const firstSeen = [...new Set(nums)];
+          // Printing both maps only teaches something when they disagree: with an
+          // already-ascending insertion order the two halves print identically.
+          expect(firstSeen, `${ex.id}: insertion order is already sorted`).not.toEqual(
+            [...firstSeen].sort((a, b) => a - b),
+          );
+          expect(firstSeen.length, `${ex.id}: no repeated value to count`).toBeLessThan(nums.length);
+        }
+      }
+    }
   });
 
   it("cloze generators always include the blank", () => {
@@ -198,5 +256,27 @@ describe.skipIf(!hasJdk())("generator contracts - java", () => {
       }
     }
     expect(compiled, "no generated java write starters were compiled").toBeGreaterThan(0);
+  }, 300_000);
+
+  it("every generated java predict-output snippet runs cleanly and deterministically", async () => {
+    // One seed per tier, unlike the fix loop above: every rendered line of a trace
+    // snippet is on the one code path its tier renders, so a single seed already puts
+    // all of it through the launcher - and each pass here costs a fresh JVM.
+    let ran = 0;
+    for (const g of javaGenerators) {
+      for (const tier of g.tiers) {
+        const ex = g.generate("0dd001", tier);
+        if (ex.kind !== "predict-output") continue;
+        const first = await gradePrediction(ex, scratch(), "");
+        expect(first.error, `${ex.id} t${tier}: ${first.error}`).toBeUndefined();
+        expect(first.actual, `${ex.id} t${tier}: snippet prints nothing`).toBeTruthy();
+        // Second run, fresh dir, graded against the first run's stdout: identical output
+        // is exactly what "correct" means here.
+        const second = await gradePrediction(ex, scratch(), first.actual!);
+        expect(second.correct, `${ex.id} t${tier}: output is not deterministic`).toBe(true);
+        ran++;
+      }
+    }
+    expect(ran, "no generated java predict-output snippets were run").toBeGreaterThan(0);
   }, 300_000);
 });
