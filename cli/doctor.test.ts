@@ -170,6 +170,19 @@ describe("checkPacks", () => {
       rmSync(broken, { recursive: true, force: true });
     }
   });
+  it("says so when a pack path is a file, instead of leaking ENOTDIR", () => {
+    const dir = mkdtempSync(join(tmpdir(), "atrophy-pack-"));
+    const file = join(dir, "pack.json");
+    writeFileSync(file, "{}", "utf8");
+    try {
+      const r = checkPacks([file]);
+      expect(r.status).toBe("fail");
+      expect(r.detail).toContain("not a directory");
+      expect(r.detail).not.toMatch(/ENOTDIR/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it("says a pack directory is missing instead of leaking ENOENT", () => {
     const gone = join(tmpdir(), "atrophy-pack-does-not-exist-9f3a1c");
     const r = checkPacks([gone]);

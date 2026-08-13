@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pc from "picocolors";
@@ -165,8 +165,20 @@ export function checkPacks(dirs: string[]): CheckResult {
   if (dirs.length === 0) return { name: "Packs", status: "pass", detail: "no packs configured" };
   const parts: string[] = [];
   for (const dir of dirs) {
-    if (!existsSync(dir)) {
-      return { name: "Packs", status: "fail", detail: `${dir}: not found (check $ATROPHY_PACKS / "packs" in your config)` };
+    // A path that exists but is a *file* passes an existence check and then fails
+    // deep inside readdir with a raw ENOTDIR; both mistakes get the same friendly line.
+    let isDir = false;
+    try {
+      isDir = statSync(dir).isDirectory();
+    } catch {
+      /* missing (or unreadable) - same message */
+    }
+    if (!isDir) {
+      return {
+        name: "Packs",
+        status: "fail",
+        detail: `${dir}: not found or not a directory (check $ATROPHY_PACKS / "packs" in your config)`,
+      };
     }
     try {
       const n = loadBank(dir).length;
