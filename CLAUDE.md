@@ -15,6 +15,7 @@ npx vitest                            # watch mode
 npm run typecheck                     # tsc --noEmit
 npm run build                         # tsc -p tsconfig.build.json → dist/
 npm run dev -- drill --show           # run the CLI from source (tsx); everything after -- is CLI args
+npx tsx cli/index.ts drill --lang java # same thing, but flags survive: npm (at least on Windows) eats the `--…` args after `--`, so `npm run dev -- drill --show --lang java` reaches the CLI as `drill` alone
 npm run seed:demo                     # regenerate dashboard/demo-data.json
 ```
 

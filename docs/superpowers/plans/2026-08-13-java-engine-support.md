@@ -1,5 +1,7 @@
 # Java Engine Support Implementation Plan (Plan A of 3)
 
+> **Amended during execution** — the SDD ledger's constraint amendments (notably the six-flag `JAVA_RUNTIME_FLAGS`) supersede this text where they differ.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make `atrophy drill --lang java` fully work: schema, Java grading (reflection harness + testCode kinds), recall kind, whiteboard mode, multi-dir packs, doctor/CLI/CI support.
