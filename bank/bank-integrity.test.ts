@@ -121,6 +121,9 @@ const javaPredicts = bank.filter(
 
 // Java content is validated only where a toolchain exists; the loops are armed and
 // empty until Java exercises ship, so new content lands into an existing gate.
+// Generated java families ship no JSON and so never reach this bank, but they reach the
+// same grader: their copy of these gates lives beside the other generator contracts,
+// in bank/generators/generators.test.ts ("generator contracts - java").
 if (!hasJdk()) console.warn("⚠ JDK not found - Java exercises NOT validated. Install JDK 21.");
 describe.skipIf(!hasJdk())("bank integrity - java", () => {
   it("every java starter compiles (no javac vomit on first submit)", async () => {
