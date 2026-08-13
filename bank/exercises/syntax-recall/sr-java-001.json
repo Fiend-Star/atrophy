@@ -1,0 +1,22 @@
+{
+  "id": "sr-java-001",
+  "kind": "write",
+  "axis": "syntax-recall",
+  "language": "java",
+  "tier": 1,
+  "title": "Reverse the word order of a sentence",
+  "prompt": "Write reverseWords(String s) returning s with its words in reverse order.\nWords are separated by exactly one space; there is no leading, trailing, or doubled\nspace. Join the reversed words back together with single spaces. The empty string\nreturns the empty string.\n\nExamples:\n  reverseWords(\"the sky is blue\") -> \"blue is sky the\"\n  reverseWords(\"hello\")           -> \"hello\"\n  reverseWords(\"\")                -> \"\"\n\nKeep the class name Solution and the given method signature.",
+  "functionName": "reverseWords",
+  "starterCode": "public class Solution {\n    static String reverseWords(String s) {\n        // your code\n        return \"\";\n    }\n}\n",
+  "softTimeLimitSeconds": 180,
+  "testTimeoutMs": 20000,
+  "tests": [
+    { "args": ["the sky is blue"], "expected": "blue is sky the" },
+    { "args": ["hello"], "expected": "hello" },
+    { "args": [""], "expected": "" },
+    { "args": ["a b"], "expected": "b a" },
+    { "args": ["one two three four"], "expected": "four three two one" },
+    { "args": ["Java is verbose"], "expected": "verbose is Java" },
+    { "args": ["x y z"], "expected": "z y x" }
+  ]
+}
