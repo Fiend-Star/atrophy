@@ -65,12 +65,18 @@ Not every skill is "write code against tests" - see the table below.
 | **API memory** | Fill in the blanked-out stdlib call | Answer match |
 | **Decomposition** | Outline a design (rate limiter, folder sync…) in bullets | You score yourself against a revealed rubric |
 
-Exercises come in Python and JavaScript across three difficulty tiers - a
+The built-in bank is Python and JavaScript across three difficulty tiers - a
 hand-written static bank plus **generator families that render endless fresh
 variants** (randomized data, names, and twists; same seed always reproduces
 the same exercise). Difficulty targets *you*: each drill picks the tier where
 your predicted success is closest to ~65%, the point where a rep carries the
 most information. Comfortable wins teach the rating nothing.
+
+Java drills are graded too (`--lang java`, needs a JDK - see Install), and
+they add one more kind: a **behavioral** drill where the exercise ships its
+own Java test harness, so it can grade concurrency - races, deadlocks,
+visibility - instead of a return value. No Java exercises ship in the
+built-in bank yet; today you add them yourself as a pack (see Packs).
 
 ## The dashboard
 
@@ -114,7 +120,13 @@ measure: [docs/research.md](docs/research.md).
 
 ## Install
 
-Requires Node.js ≥ 22, plus Python 3 on `PATH` if you want the Python exercises.
+Requires Node.js ≥ 22. Python 3 on `PATH` grades the Python exercises; a JDK
+≥ 21 (Temurin recommended) grades the Java ones. A drill can only be graded
+if its language's toolchain is installed, so install whichever you plan to
+practise - `atrophy doctor` reports what it found. On Windows, if the `javac`
+on your `PATH` is a `.cmd`/`.bat` shim (some version managers install one),
+point `ATROPHY_JAVA_HOME` at the JDK directory instead: grading runs the
+toolchain without a shell, which cannot execute shims.
 
 ```sh
 npm install -g atrophy
@@ -128,10 +140,11 @@ atrophy baseline
 | `atrophy baseline` | First session: one drill per skill (~25 min) |
 | `atrophy drill` | One drill on your most-neglected skill |
 | `atrophy drill --axis debugging` | Drill a specific skill (`syntax-recall`, `debugging`, `code-reading`, `api-memory`, `decomposition`) |
-| `atrophy drill --lang python` | Only Python (or `javascript`) exercises |
+| `atrophy drill --lang python` | Only Python (or `javascript`, `java`) exercises |
 | `atrophy drill --ai-on` | Monthly comparison rep with AI allowed |
 | `atrophy publish --handle you` | Opt in to the [public leaderboard](https://ashutosh-rath02.github.io/atrophy/leaderboard.html); afterwards every drill syncs automatically (`--stop` opts out) |
 | `atrophy stats` | Ratings table and week streak in the terminal |
+| `atrophy doctor` | Check your setup: runtimes, editor, sandbox, bank, packs |
 | `atrophy serve` | Dashboard at `127.0.0.1:4646` |
 | `atrophy export -o out.json` | Dump all your data as JSON |
 
@@ -140,6 +153,26 @@ atrophy baseline
 One SQLite file at `~/.atrophy/atrophy.db`, owned by you. No account, no
 sync, no telemetry, nothing leaves your machine. `ATROPHY_DB` overrides the
 location if you want it in a dotfiles repo or synced folder.
+
+### Packs
+
+A pack is a directory of exercise JSON files that merges with the built-in
+bank - your team's interview questions, the Java drills you wrote, whatever
+you want in the rotation. Point at one either way:
+
+```sh
+export ATROPHY_PACKS=/path/to/pack   # several: ':'-separated (';' on Windows)
+# or, in ~/.atrophy/config.json:
+# { "packs": ["C:/path/to/pack"] }
+```
+
+Both sources are additive and de-duplicated; a directory that doesn't exist,
+or an exercise id that collides with one already loaded, is an error you see
+immediately rather than a drill that silently disappears. `atrophy doctor`
+lists every pack it resolved and how many exercises each one loaded.
+
+Packs are code that runs on your machine during grading - only add
+directories you trust.
 
 ## Honest limitations
 
@@ -159,13 +192,20 @@ location if you want it in a dotfiles repo or synced folder.
 git clone https://github.com/ashutosh-rath02/atrophy.git
 cd atrophy && npm install
 npm run dev -- drill    # CLI from source
-npm test                # 70 tests, incl. real grading subprocesses
+npm test                # 230+ tests, incl. real grading subprocesses
 ```
 
 New exercises are the most welcome contribution: one JSON file under
 `bank/exercises/<skill>/`, validated by `bank/schema.ts`. CI proves every
 planted bug actually fails a test and every code-reading snippet runs
 deterministically, so a broken exercise can't merge.
+
+Java exercises are the same one-file flow (`"language": "java"`, with
+`starterCode` a `public class Solution` and no `package` line). Behavioral
+drills use `"kind": "write-harness"` or `"fix-harness"` and ship their own
+`testCode` - a `public class Harness` with a `main` that prints the result
+line - plus `totalChecks`, the number of checks that harness must report.
+CI compiles every Java starter and holds the harness to that count.
 
 Roadmap: LLM-judged decomposition drills, more languages, spaced-repetition
 scheduling (FSRS), per-axis leaderboards. More to be added soon.
