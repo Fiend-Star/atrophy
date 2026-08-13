@@ -126,10 +126,16 @@ export function selectExercise(opts: SelectOptions): Exercise | undefined {
 }
 
 /** Axes that actually have content for the given language ("any" counts for every language). */
-export function availableAxes(bank: Exercise[], language?: Language): Axis[] {
-  return AXES.filter((axis) =>
-    bank.some(
-      (e) => e.axis === axis && (language === undefined || e.language === language || e.language === "any"),
-    ),
+export function availableAxes(
+  bank: Exercise[],
+  language?: Language,
+  generators: ExerciseGenerator[] = [],
+): Axis[] {
+  const matchesLang = (l: Language | "any") =>
+    language === undefined || l === language || l === "any";
+  return AXES.filter(
+    (axis) =>
+      bank.some((e) => e.axis === axis && matchesLang(e.language)) ||
+      generators.some((g) => g.axis === axis && matchesLang(g.language)),
   );
 }

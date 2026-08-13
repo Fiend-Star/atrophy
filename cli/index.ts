@@ -82,7 +82,7 @@ function parseLang(value: string): Language {
  * that actually has Java content instead of one that cannot be drilled.
  */
 function dueAxis(store: Store, bank: Exercise[], language?: Language): Axis {
-  const available = availableAxes(bank, language);
+  const available = availableAxes(bank, language, allGenerators);
   let best: Axis = available[0] ?? "syntax-recall";
   let bestTime = Infinity;
   for (const a of available) {
@@ -316,7 +316,7 @@ function exportJson(store: Store, out?: string): void {
 async function baseline(store: Store, flags: DrillFlags): Promise<void> {
   const bank = loadBank(bankDirs());
   const language = flags.lang ? parseLang(flags.lang) : undefined;
-  const axesWithExercises = availableAxes(bank, language);
+  const axesWithExercises = availableAxes(bank, language, allGenerators);
   console.log(
     pc.bold("Baseline session") +
       ` - one unaided drill per axis (${axesWithExercises.length} available today).`,

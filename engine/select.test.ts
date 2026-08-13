@@ -177,3 +177,27 @@ describe("availableAxes", () => {
     expect(availableAxes(bank)).toEqual(["code-reading", "api-memory", "decomposition"]);
   });
 });
+
+describe("availableAxes with generators", () => {
+  const javaGen: ExerciseGenerator = {
+    family: "sr-java-test",
+    axis: "syntax-recall",
+    language: "java",
+    tiers: [1],
+    generate() {
+      throw new Error("never called by availableAxes");
+    },
+  };
+
+  it("includes an axis whose only content for the language is a generator family", () => {
+    expect(availableAxes([], "java", [javaGen])).toEqual(["syntax-recall"]);
+  });
+
+  it("still excludes axes with no static or generator content", () => {
+    expect(availableAxes([], "java", [])).toEqual([]);
+  });
+
+  it("does not add axes for a non-matching language filter", () => {
+    expect(availableAxes([], "python", [javaGen])).toEqual([]);
+  });
+});
