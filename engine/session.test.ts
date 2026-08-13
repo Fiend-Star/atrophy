@@ -178,6 +178,29 @@ describe("runDrill - whiteboard mode (submitPolicy: single)", () => {
   }, 30_000);
 });
 
+// Deliberately outside the JDK gate: the point is what happens when there is no JDK.
+describe("runDrill - --solution when grading never ran", () => {
+  it("abandons instead of scoring a 0 the user did not earn", async () => {
+    const previous = process.env.ATROPHY_JAVA_HOME;
+    process.env.ATROPHY_JAVA_HOME = join(tmpdir(), "atrophy-no-such-jdk-home");
+    const { lines, restore } = captureLog();
+    let outcome: DrillOutcome;
+    try {
+      outcome = await runDrill(harnessEx, solutionFile(harnessEx.starterCode));
+    } finally {
+      restore();
+      if (previous === undefined) delete process.env.ATROPHY_JAVA_HOME;
+      else process.env.ATROPHY_JAVA_HOME = previous;
+    }
+    // Abandoned is what stops cli/index.ts recording the session at all: a missing
+    // JDK is not evidence about the user, so the unaided rating must not move.
+    expect(outcome.abandoned).toBe(true);
+    expect(outcome.passed).toBe(0);
+    expect(outcome.score).toBe(0);
+    expect(lines.join("\n")).toContain("Your code did not run");
+  }, 30_000);
+});
+
 if (!hasJdk()) console.warn("⚠ JDK not found - harness drill session tests SKIPPED. Install JDK 21 to validate them.");
 describe.skipIf(!hasJdk())("runDrill - harness kinds", () => {
   it("routes write-harness through the code drill and grades the solution file", async () => {

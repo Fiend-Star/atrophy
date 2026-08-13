@@ -261,8 +261,16 @@ async function codeDrill(ex: CodeLikeExercise, solutionOverride?: string): Promi
     if (solutionOverride) {
       copyFileSync(solutionOverride, file);
       const result = await grade(ex, dir);
-      const passed = result.harnessError ? 0 : result.passed;
-      return makeOutcome(ex, passed, elapsed());
+      // A harnessError produced no graded checks, so it is never evidence about the
+      // user - a missing JDK, a javac failure or a broken install must not score them.
+      // The interactive loop just stays open; the scripted path has no loop to fall
+      // back into, so it abandons instead, and drillOnce records nothing for an
+      // abandoned outcome. That is what keeps a broken toolchain off the rating.
+      if (result.harnessError) {
+        printFailures(result);
+        return makeOutcome(ex, 0, elapsed(), true);
+      }
+      return makeOutcome(ex, result.passed, elapsed());
     }
 
     printHeader(ex);
