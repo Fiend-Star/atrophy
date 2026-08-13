@@ -34,6 +34,9 @@ const baseFields = {
   testTimeoutMs: z.number().int().positive().default(10_000),
 };
 
+/** "single" = whiteboard mode: exactly one graded submission, no fix-and-resubmit loop. Absent means "loop". */
+const submitPolicySchema = z.enum(["loop", "single"]).optional();
+
 /** Kinds where the user edits code that gets run against hidden tests. */
 const codeFields = {
   ...baseFields,
@@ -43,6 +46,7 @@ const codeFields = {
   /** Written into the solution file the user edits (for "fix": the buggy code). */
   starterCode: z.string().min(1),
   tests: z.array(testCaseSchema).min(1),
+  submitPolicy: submitPolicySchema,
 };
 
 /** Kinds where the exercise ships its own Java test harness (behavioral drills). */
@@ -55,6 +59,7 @@ const harnessFields = {
   testCode: z.string().min(1),
   /** Declared number of checks; the harness's reported total must match at grade time. */
   totalChecks: z.number().int().min(1),
+  submitPolicy: submitPolicySchema,
 };
 
 export const exerciseSchema = z.discriminatedUnion("kind", [

@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { BankError, isHarness, loadBank, parseExercise, totalUnits, type HarnessExercise, type RecallExercise } from "./schema.js";
+import { BankError, isHarness, loadBank, parseExercise, totalUnits, type CodeExercise, type HarnessExercise, type RecallExercise } from "./schema.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 
@@ -17,6 +17,21 @@ const valid = {
   starterCode: "def f(): pass",
   softTimeLimitSeconds: 300,
   tests: [{ args: [1], expected: 2 }],
+};
+
+const harness = {
+  id: "conc-java-001",
+  kind: "write-harness",
+  axis: "syntax-recall",
+  language: "java",
+  tier: 3,
+  title: "Bounded blocking queue",
+  prompt: "Implement put/take with wait/notifyAll.",
+  softTimeLimitSeconds: 1500,
+  testTimeoutMs: 30000,
+  starterCode: "public class Solution { /* ... */ }",
+  testCode: "public class Harness { public static void main(String[] a) { Atrophy.plan(3); Atrophy.report(); } }",
+  totalChecks: 3,
 };
 
 describe("parseExercise", () => {
@@ -114,20 +129,6 @@ describe("recall kind", () => {
 });
 
 describe("harness kinds", () => {
-  const harness = {
-    id: "conc-java-001",
-    kind: "write-harness",
-    axis: "syntax-recall",
-    language: "java",
-    tier: 3,
-    title: "Bounded blocking queue",
-    prompt: "Implement put/take with wait/notifyAll.",
-    softTimeLimitSeconds: 1500,
-    testTimeoutMs: 30000,
-    starterCode: "public class Solution { /* ... */ }",
-    testCode: "public class Harness { public static void main(String[] a) { Atrophy.plan(3); Atrophy.report(); } }",
-    totalChecks: 3,
-  };
   it("accepts both harness kinds and counts totalChecks units", () => {
     const ex = parseExercise(JSON.stringify(harness));
     expect(ex.kind).toBe("write-harness");
@@ -154,6 +155,25 @@ describe("harness kinds", () => {
     ["fractional totalChecks", { ...harness, totalChecks: 1.5 }],
   ])("rejects %s", (_name, bad) => {
     expect(() => parseExercise(JSON.stringify(bad))).toThrow(BankError);
+  });
+});
+
+describe("submitPolicy", () => {
+  it("accepts single on write and harness kinds; rejects junk", () => {
+    // z.object strips unknown keys, so reading the value back is what proves submitPolicy is in the schema at all.
+    expect((parseExercise(JSON.stringify({ ...valid, submitPolicy: "single" })) as CodeExercise).submitPolicy).toBe("single");
+    expect((parseExercise(JSON.stringify(valid)) as CodeExercise).submitPolicy).toBeUndefined();
+    expect(() => parseExercise(JSON.stringify({ ...valid, submitPolicy: "yolo" }))).toThrow(BankError);
+    expect(() => parseExercise(JSON.stringify({ ...valid, submitPolicy: "yolo" }))).toThrow(/submitPolicy/);
+  });
+
+  it("round-trips on harness kinds too", () => {
+    const single = parseExercise(JSON.stringify({ ...harness, submitPolicy: "single" })) as HarnessExercise;
+    expect(single.submitPolicy).toBe("single");
+    const loop = parseExercise(JSON.stringify({ ...harness, submitPolicy: "loop" })) as HarnessExercise;
+    expect(loop.submitPolicy).toBe("loop");
+    expect((parseExercise(JSON.stringify(harness)) as HarnessExercise).submitPolicy).toBeUndefined();
+    expect(() => parseExercise(JSON.stringify({ ...harness, submitPolicy: "yolo" }))).toThrow(/submitPolicy/);
   });
 });
 
