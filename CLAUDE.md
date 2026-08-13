@@ -22,7 +22,7 @@ Requires Node ≥ 22 and Python 3 on `PATH` (Python exercises and their integrit
 
 Useful env vars when developing: `ATROPHY_DB` (SQLite path override — point at a throwaway file, the default is the user's real `~/.atrophy/atrophy.db`), `ATROPHY_NO_SYNC=1` (kill-switch for all leaderboard network calls; set it whenever recording ai-off sessions in dev/tests so junk never reaches the public board), `ATROPHY_BANK` (**replaces** the built-in bank dir), `ATROPHY_PACKS` (**additive** pack dirs, `path.delimiter`-separated — `;` on Windows), `ATROPHY_JAVA_HOME` (JDK override; `javac`/`java` are resolved as `$ATROPHY_JAVA_HOME/bin/…`, which is how you get past a `.cmd` shim from scoop/mise — the runner spawns without a shell and cannot execute one), `ATROPHY_PYTHON`, `ATROPHY_EDITOR`, `ATROPHY_CONFIG`, `ATROPHY_LEADERBOARD_URL`.
 
-Validating an exercise pack — the content gate CI runs, pointed at the pack instead (`ATROPHY_BANK` replaces the bank, so this checks the pack alone): `$env:ATROPHY_BANK="<pack-dir>"; npx vitest run bank/bank-integrity.test.ts`.
+Validating an exercise pack — the content gate CI runs, pointed at the pack instead: `$env:ATROPHY_BANK="<pack-dir>"; npx vitest run bank/bank-integrity.test.ts`. `ATROPHY_BANK` **replaces** the bank, so this checks the pack alone and can only catch id collisions *within* it; a collision with a shipped exercise shows up in `atrophy doctor`, which loads base + packs merged.
 
 Interactive drills block on stdin/$EDITOR. For non-interactive runs use `--show` (preview, nothing recorded) or `--solution <file>` (grades a pre-written answer file; how the e2e-ish tests drive drills).
 
@@ -63,4 +63,10 @@ Java authoring rules the harness enforces (each surfaces as a named grading erro
 - The graded method must be unique by arity. Same name + same parameter count + different parameter types is rejected ("overloads are not supported"), inherited ones included; an *override* is fine — same signature twice collapses to the most-derived declaration, and synthetic bridge methods are skipped so a generic superclass does not read as a phantom overload.
 - `Map` parameters must declare a literal `String` key type (`Map<String, Integer>`); JSON object keys are strings, so a wildcard, a type variable, or `Map<Integer, …>` is rejected.
 - Integer values in `tests` stay within ±2^53. Java parses them exactly as `long`, but the exercise JSON goes through Node's `JSON.parse` first, so anything larger is already a different number before grading sees it.
+- Every Java `starterCode` must **compile**: the integrity suite runs `javac` over each one and expects exit 0. A `fix`/`fix-harness` bug therefore has to be semantic (wrong bound, missed lock, lost update), never a syntax or type error.
 - Harness kinds: `testCode` is a complete `public class Harness` with `main` that prints exactly one `ATROPHY_RESULT` line (use `Atrophy.plan`/`check`/`report`, and `Atrophy.watchdog(ms)` well under `testTimeoutMs` so a deadlock still reports), and its total must equal `totalChecks`.
+- A harness must **always report**, including on the buggy starter it ships with. Integrity grades every harness starter and requires a real result (no `harnessError`): an exception that escapes `main` prints no marker line, which grades as a harness error rather than as the failure the drill is supposed to teach. So wrap the checks:
+
+  ```java
+  try { /* checks */ } catch (Throwable t) { Atrophy.check("harness crashed: " + t, false); } finally { Atrophy.report(); }
+  ```
