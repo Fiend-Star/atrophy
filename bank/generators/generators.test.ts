@@ -87,6 +87,18 @@ describe("generator contracts", () => {
     }
   }, 120_000);
 
+  it("sr-java-cond renders a compiling-shape java starter with a matching functionName", () => {
+    const gen = allGenerators.find((g) => g.family === "sr-java-cond")!;
+    const ex = gen.generate("abc123", 1);
+    expect(ex.kind).toBe("write");
+    expect(ex.language).toBe("java");
+    if (ex.kind !== "write") throw new Error("unreachable");
+    expect(ex.starterCode).toContain("public class Solution");
+    expect(ex.starterCode).not.toContain("package ");
+    expect(ex.starterCode).toContain(`static int ${ex.functionName}(int[] nums)`);
+    expect(ex.testTimeoutMs).toBeGreaterThanOrEqual(20_000);
+  });
+
   it("cloze generators always include the blank", () => {
     for (const g of allGenerators.filter((x) => x.axis === "api-memory")) {
       for (const tier of g.tiers) {

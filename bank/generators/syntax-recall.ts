@@ -81,7 +81,10 @@ function randList(rng: Rng, n: number, min: number, max: number): number[] {
   return Array.from({ length: n }, () => int(rng, min, max));
 }
 
-function makeCondGenerator(family: string, language: "python" | "javascript"): ExerciseGenerator {
+function makeCondGenerator(
+  family: string,
+  language: "python" | "javascript" | "java",
+): ExerciseGenerator {
   return {
     family,
     axis: "syntax-recall",
@@ -134,7 +137,9 @@ function makeCondGenerator(family: string, language: "python" | "javascript"): E
       const starterCode =
         language === "python"
           ? `def ${fnName}(nums):\n    pass\n`
-          : `function ${fnName}(nums) {\n  // your code\n}\n\nmodule.exports = { ${fnName} };\n`;
+          : language === "javascript"
+            ? `function ${fnName}(nums) {\n  // your code\n}\n\nmodule.exports = { ${fnName} };\n`
+            : `public class Solution {\n    static int ${fnName}(int[] nums) {\n        throw new UnsupportedOperationException("implement me");\n    }\n}\n`;
 
       const raw: unknown = {
         id: `${family}-${seed}`,
@@ -147,6 +152,8 @@ function makeCondGenerator(family: string, language: "python" | "javascript"): E
         functionName: fnName,
         starterCode,
         softTimeLimitSeconds: SOFT_LIMIT_BY_TIER[tier] ?? 300,
+        // Grading java pays javac + JVM cold start, which the schema's 10s default does not cover.
+        ...(language === "java" ? { testTimeoutMs: 20_000 } : {}),
         tests,
       };
       return exerciseSchema.parse(raw) as Exercise;
@@ -157,4 +164,5 @@ function makeCondGenerator(family: string, language: "python" | "javascript"): E
 export const syntaxRecallGenerators: ExerciseGenerator[] = [
   makeCondGenerator("sr-py-cond", "python"),
   makeCondGenerator("sr-js-cond", "javascript"),
+  makeCondGenerator("sr-java-cond", "java"),
 ];
