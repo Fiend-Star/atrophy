@@ -38,7 +38,10 @@ function captureLog(): { lines: string[]; restore: () => void } {
  * on the prompt rather than a timer keeps it deterministic - an answer written while the
  * grader is running would be read as a line with no question pending and silently lost.
  */
-async function driveDrill(ex: Exercise, answers: string[]): Promise<{ outcome: DrillOutcome; output: string }> {
+async function driveDrill(
+  ex: Exercise,
+  answers: string[],
+): Promise<{ outcome: DrillOutcome; output: string; prompts: string }> {
   const fake = new PassThrough();
   const stdinDescriptor = Object.getOwnPropertyDescriptor(process, "stdin")!;
   Object.defineProperty(process, "stdin", { value: fake, configurable: true });
@@ -46,18 +49,24 @@ async function driveDrill(ex: Exercise, answers: string[]): Promise<{ outcome: D
   process.env.ATROPHY_EDITOR = "echo"; // a no-op "editor" on both cmd and sh
   const { lines, restore: restoreLog } = captureLog();
   const queue = [...answers];
+  // readline writes prompts here, not through console.log - assertions about which
+  // prompt the user was offered ("fix & resubmit" vs not) have to read these chunks.
+  const prompts: string[] = [];
   const writeSpy = vi
     .spyOn(process.stdout, "write")
     .mockImplementation(((chunk: unknown) => {
-      if (typeof chunk === "string" && chunk.includes("[Enter]")) {
-        const next = queue.shift();
-        if (next !== undefined) setImmediate(() => fake.write(`${next}\n`));
+      if (typeof chunk === "string") {
+        prompts.push(chunk);
+        if (chunk.includes("[Enter]")) {
+          const next = queue.shift();
+          if (next !== undefined) setImmediate(() => fake.write(`${next}\n`));
+        }
       }
       return true;
     }) as typeof process.stdout.write);
   try {
     const outcome = await runDrill(ex);
-    return { outcome, output: lines.join("\n") };
+    return { outcome, output: lines.join("\n"), prompts: prompts.join("\n") };
   } finally {
     writeSpy.mockRestore();
     restoreLog();
@@ -126,12 +135,33 @@ describe("runDrill - whiteboard mode (submitPolicy: single)", () => {
   it("grades exactly once and says so instead of offering a retry", async () => {
     // Two answers: the first Enter trips the "file hasn't changed" guard (not a
     // submission), the second is the one graded submission.
-    const { outcome, output } = await driveDrill({ ...pyEx, submitPolicy: "single" }, ["", ""]);
+    const { outcome, output, prompts } = await driveDrill({ ...pyEx, submitPolicy: "single" }, ["", ""]);
     expect(outcome.abandoned).toBe(false);
     expect(outcome.passed).toBe(0);
     expect(outcome.total).toBe(1);
     expect(output).toContain("whiteboard mode: single submission, no retries");
-    expect(output).not.toContain("fix & resubmit");
+    expect(prompts).not.toContain("fix & resubmit"); // the retry prompt was never offered
+  }, 30_000);
+
+  it("does not consume the single submission when the toolchain fails", async () => {
+    // A harnessError is not drill evidence: a missing JDK (or any grading failure)
+    // must leave the one submission intact rather than scoring the user 0.
+    const previous = process.env.ATROPHY_JAVA_HOME;
+    process.env.ATROPHY_JAVA_HOME = join(tmpdir(), "atrophy-no-such-jdk-home");
+    try {
+      const { outcome, output, prompts } = await driveDrill(
+        { ...harnessEx, submitPolicy: "single" },
+        ["", "", "q"],
+      );
+      expect(output).toContain("Your code did not run");
+      expect(output).not.toContain("whiteboard mode");
+      // Reaching a retry prompt at all is the proof the submission was not consumed.
+      expect(prompts).toContain("fix & resubmit");
+      expect(outcome.abandoned).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.ATROPHY_JAVA_HOME;
+      else process.env.ATROPHY_JAVA_HOME = previous;
+    }
   }, 30_000);
 
   it("still loops when no policy is set (absent means loop, not 'loop')", async () => {

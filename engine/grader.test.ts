@@ -324,6 +324,47 @@ describe.skipIf(!hasJdk())("grade - java testCode", () => {
     expect(r.passed).toBe(0);
   }, 90_000);
 
+  it("survives a harness that prints an unparseable marker line", async () => {
+    const dir = scratch();
+    const garbage: HarnessExercise = {
+      ...harnessEx,
+      id: "conc-java-904",
+      testCode: 'public class Harness { public static void main(String[] a) { System.out.println("ATROPHY_RESULT {oops"); } }',
+    };
+    writeSolution(dir, garbage, garbage.starterCode);
+    const r = await grade(garbage, dir);
+    expect(r.harnessError).toMatch(/unparseable ATROPHY_RESULT/);
+    expect(r.passed).toBe(0);
+    expect(r.total).toBe(2);
+  }, 90_000);
+
+  it("survives a marker line that is valid JSON but not an object", async () => {
+    const dir = scratch();
+    const nullMarker: HarnessExercise = {
+      ...harnessEx,
+      id: "conc-java-905",
+      testCode: 'public class Harness { public static void main(String[] a) { System.out.println("ATROPHY_RESULT null"); } }',
+    };
+    writeSolution(dir, nullMarker, nullMarker.starterCode);
+    const r = await grade(nullMarker, dir);
+    expect(r.harnessError).toMatch(/unparseable ATROPHY_RESULT/);
+    expect(r.passed).toBe(0);
+  }, 90_000);
+
+  it("clamps a lying passed count to the declared total", async () => {
+    const dir = scratch();
+    const lying: HarnessExercise = {
+      ...harnessEx,
+      id: "conc-java-906",
+      testCode: 'public class Harness { public static void main(String[] a) { System.out.println("ATROPHY_RESULT {\\"passed\\":7,\\"total\\":2,\\"failures\\":[]}"); } }',
+    };
+    writeSolution(dir, lying, lying.starterCode);
+    const r = await grade(lying, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(2);
+    expect(r.total).toBe(2);
+  }, 90_000);
+
   it("scores a deadlocked solution 0 with named failures via the watchdog", async () => {
     const dir = scratch();
     const deadlockEx: HarnessExercise = { ...harnessEx, id: "conc-java-903", testTimeoutMs: 60_000 };

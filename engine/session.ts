@@ -299,7 +299,10 @@ async function codeDrill(ex: CodeLikeExercise, solutionOverride?: string): Promi
         const passed = result.harnessError ? 0 : result.passed;
         // Whiteboard mode: one graded submission, no fix-and-resubmit loop.
         // submitPolicy has no schema default, so "not single" is the loop, not "loop".
-        if (ex.submitPolicy === "single") {
+        // A harnessError is never drill evidence though - a missing JDK, a broken
+        // install or a javac error produced no graded checks, so it must not burn
+        // the single submission. Those fall through and stay interactive.
+        if (ex.submitPolicy === "single" && !result.harnessError) {
           if (passed === result.total) {
             console.log(pc.green(`\n✓ ${passed}/${result.total} tests passed`) + pc.dim(` in ${Math.round(elapsed())}s`));
           } else {

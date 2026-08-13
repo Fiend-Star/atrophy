@@ -160,7 +160,26 @@ function parseMarker(result: RunResult, total: number, timeoutMs: number): Grade
       harnessError: detail || `harness produced no result (exit ${result.exitCode})`,
     };
   }
-  return JSON.parse(line.slice(RESULT_MARKER.length)) as GradeResult;
+  // The marker line is pack-authored on the testCode path, so it is untrusted input:
+  // an unterminated object (SyntaxError) or a bare `null` (which every downstream
+  // property read would throw on) must come back as a result, not as an exception
+  // thrown through grade() and out of the live drill loop.
+  const unparseable: GradeResult = {
+    passed: 0,
+    total,
+    failures: [],
+    harnessError: "harness printed an unparseable ATROPHY_RESULT line - please report this exercise",
+  };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line.slice(RESULT_MARKER.length));
+  } catch {
+    return unparseable;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return unparseable;
+  const graded = parsed as GradeResult;
+  // A hand-rolled harness may omit an empty failures list; printFailures indexes it.
+  return { ...graded, failures: Array.isArray(graded.failures) ? graded.failures : [] };
 }
 
 /** javac + java with friendly errors; returns a GradeResult on failure, or the run result. */
@@ -254,7 +273,9 @@ async function gradeHarness(ex: HarnessExercise, dir: string): Promise<GradeResu
       harnessError: `exercise bug: harness reported ${parsed.total} checks but the exercise declares ${ex.totalChecks} - please report this exercise`,
     };
   }
-  return parsed;
+  // Clamp what gets rendered and persisted: the count is pack-authored, and
+  // exerciseScore's clamp only protects the rating, not the stored row or "7/2 passed".
+  return { ...parsed, passed: Math.min(Math.max(parsed.passed, 0), total) };
 }
 
 /**
