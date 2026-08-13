@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Amended during execution — the SDD ledger's rulings supersede this text where they differ.** Notably: the "catch-all check slot" in the harness tasks (9, 14, 16) is ABOLISHED — `Atrophy.plan(N)`/`totalChecks` count behavioral+scan checks only (the `catch (Throwable)` block still reports a named failing check on crash; `report()` pads); no harness check may be satisfiable by default `Object` behavior with zero user code; worker-side holds must strictly exceed every main-side proof deadline. Untouched write-harness starters must grade 0/N. See `.superpowers/sdd/2026-08-13-java-content-plan-b/progress.md`.
+
 **Goal:** Ship the first Java content wave: four generator families, ~21 built-in bank exercises, and the 58-exercise DeShaw pack wave 1 — all passing the bank-integrity gate.
 
 **Architecture:** Content flows through the existing pipeline unchanged: exercise JSON (static) or `ExerciseGenerator` (families) → `loadBank`/`allGenerators` → `selectExercise` → the Java grading engine shipped in Plan A. Two small engine changes lead the plan (generator-language visibility in axis selection; integrity timeout lints); everything after is pure content, gated by `bank/bank-integrity.test.ts`.
