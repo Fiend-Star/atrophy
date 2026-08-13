@@ -3,11 +3,26 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { grade, gradePrediction, solutionFileName } from "../engine/grader.js";
-import { loadBank } from "./schema.js";
+import { grade, gradePrediction, normalizeRecallAnswer, solutionFileName } from "../engine/grader.js";
+import { JAVA_COMPILE_TIMEOUT_MS, hasJdk, javacCommand } from "../engine/javatool.js";
+import { run } from "../engine/runner.js";
+import { isHarness, loadBank, type CodeLikeExercise, type PredictExercise } from "./schema.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
-const bank = loadBank(join(here, "exercises"));
+/**
+ * Any bank dir can be validated, not just the built-in one - this is how a pack
+ * gets checked before it is trusted: `ATROPHY_BANK=<pack-dir> npx vitest run
+ * bank/bank-integrity.test.ts` (same env var, same full-replace meaning as the CLI).
+ */
+const bankRoot = process.env.ATROPHY_BANK ?? join(here, "exercises");
+const bank = loadBank(bankRoot);
+const validatingBuiltInBank = !process.env.ATROPHY_BANK;
+
+/**
+ * Everything outside the JDK-gated describe below must be runnable without a JDK,
+ * so java content is filtered out of every loop that spawns a toolchain.
+ */
+const nonJava = bank.filter((e) => e.language !== "java");
 
 const dirs: string[] = [];
 function scratch(): string {
@@ -21,8 +36,11 @@ afterAll(() => {
 
 describe("bank integrity", () => {
   it("every fix exercise ships a bug that actually fails at least one test", async () => {
-    const fixes = bank.filter((e) => e.kind === "fix");
-    expect(fixes.length).toBeGreaterThan(0);
+    const fixes = nonJava.filter((e) => e.kind === "fix");
+    // The built-in bank losing its fixes would silently make this test vacuous. A pack
+    // pointed at by ATROPHY_BANK may legitimately be pure-java (validated under the JDK
+    // gate below) or ship no fix exercises at all, so it is not held to that.
+    if (validatingBuiltInBank) expect(fixes.length).toBeGreaterThan(0);
     for (const ex of fixes) {
       const dir = scratch();
       writeFileSync(join(dir, solutionFileName(ex)), ex.starterCode, "utf8");
@@ -33,7 +51,7 @@ describe("bank integrity", () => {
   }, 120_000);
 
   it("every predict-output snippet runs cleanly and deterministically", async () => {
-    const predicts = bank.filter((e) => e.kind === "predict-output");
+    const predicts = nonJava.filter((e) => e.kind === "predict-output");
     for (const ex of predicts) {
       const first = await gradePrediction(ex, scratch(), "");
       expect(first.error, `${ex.id}: ${first.error}`).toBeUndefined();
@@ -48,4 +66,70 @@ describe("bank integrity", () => {
       expect(ex.snippet, `${ex.id}: snippet has no ____ blank`).toContain("____");
     }
   });
+
+  it("every recall answer still says something after normalization", () => {
+    // The schema only demands a non-empty string, so " " gets through - and grading
+    // compares normalized forms, which would make such an answer unmatchable by anyone.
+    for (const ex of bank.filter((e) => e.kind === "recall")) {
+      for (const accepted of ex.acceptedAnswers) {
+        const { text } = normalizeRecallAnswer(accepted);
+        expect(text, `${ex.id}: accepted answer ${JSON.stringify(accepted)} normalizes to nothing`).not.toBe("");
+      }
+    }
+  });
+});
+
+const javaCode = bank.filter(
+  (e): e is CodeLikeExercise =>
+    (e.kind === "write" || e.kind === "fix" || isHarness(e)) && e.language === "java",
+);
+const javaPredicts = bank.filter(
+  (e): e is PredictExercise => e.kind === "predict-output" && e.language === "java",
+);
+
+// Java content is validated only where a toolchain exists; the loops are armed and
+// empty until Java exercises ship, so new content lands into an existing gate.
+if (!hasJdk()) console.warn("⚠ JDK not found - Java exercises NOT validated. Install JDK 21.");
+describe.skipIf(!hasJdk())("bank integrity - java", () => {
+  it("every java starter compiles (no javac vomit on first submit)", async () => {
+    for (const ex of javaCode) {
+      const dir = scratch();
+      writeFileSync(join(dir, solutionFileName(ex)), ex.starterCode, "utf8");
+      // Same locale pin as the grader's javac call, so a failure reads the same everywhere.
+      const r = await run(
+        javacCommand(),
+        ["-J-Duser.language=en", "-J-Duser.country=US", "-encoding", "UTF-8", solutionFileName(ex)],
+        { cwd: dir, timeoutMs: JAVA_COMPILE_TIMEOUT_MS },
+      );
+      expect(r.exitCode, `${ex.id}: starter does not compile:\n${r.stderr}`).toBe(0);
+    }
+  }, 300_000);
+
+  it("every java fix/fix-harness starter actually fails, and harness totals match totalChecks", async () => {
+    for (const ex of javaCode.filter((e) => e.kind === "fix" || e.kind === "fix-harness")) {
+      const dir = scratch();
+      writeFileSync(join(dir, solutionFileName(ex)), ex.starterCode, "utf8");
+      const r = await grade(ex, dir);
+      expect(r.harnessError, `${ex.id}: ${r.harnessError}`).toBeUndefined();
+      expect(r.passed, `${ex.id}: planted bug passes all checks - no bug to find`).toBeLessThan(r.total);
+    }
+    for (const ex of javaCode.filter(isHarness)) {
+      const dir = scratch();
+      writeFileSync(join(dir, solutionFileName(ex)), ex.starterCode, "utf8");
+      const r = await grade(ex, dir);
+      // grade() itself hard-fails on a total mismatch; reaching here with no harnessError proves the contract
+      expect(r.harnessError, `${ex.id}: ${r.harnessError}`).toBeUndefined();
+      expect(r.total, `${ex.id}: reported total must equal totalChecks`).toBe(ex.totalChecks);
+    }
+  }, 300_000);
+
+  it("every java predict-output snippet runs cleanly and deterministically", async () => {
+    for (const ex of javaPredicts) {
+      const first = await gradePrediction(ex, scratch(), "");
+      expect(first.error, `${ex.id}: ${first.error}`).toBeUndefined();
+      expect(first.actual, `${ex.id}: snippet prints nothing`).toBeTruthy();
+      const second = await gradePrediction(ex, scratch(), first.actual!);
+      expect(second.correct, `${ex.id}: output is not deterministic`).toBe(true);
+    }
+  }, 300_000);
 });
