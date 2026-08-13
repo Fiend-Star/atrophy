@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { z } from "zod";
 
 export const AXES = [
@@ -167,16 +167,20 @@ export function parseExercise(json: string, source = "<inline>"): Exercise {
 export function loadBank(dirs: string | string[]): Exercise[] {
   const roots = Array.isArray(dirs) ? dirs : [dirs];
   const exercises: Exercise[] = [];
-  const seen = new Map<string, string>(); // id -> first file that declared it
+  const seen = new Map<string, string>(); // id -> resolved path of the file that declared it
   const walk = (d: string) => {
     for (const entry of readdirSync(d, { withFileTypes: true })) {
       const full = join(d, entry.name);
       if (entry.isDirectory()) walk(full);
       else if (entry.isFile() && entry.name.endsWith(".json")) {
+        const canonical = resolve(full);
         const ex = parseExercise(readFileSync(full, "utf8"), full);
         const first = seen.get(ex.id);
-        if (first) throw new BankError(`duplicate exercise id: ${ex.id} (${first} and ${full})`);
-        seen.set(ex.id, full);
+        // Roots may overlap (the same dir twice, or a pack nested under the bank), so the
+        // same file can be walked more than once. That is not a duplicate id.
+        if (first === canonical) continue;
+        if (first) throw new BankError(`duplicate exercise id: ${ex.id} (${first} and ${canonical})`);
+        seen.set(ex.id, canonical);
         exercises.push(ex);
       }
     }

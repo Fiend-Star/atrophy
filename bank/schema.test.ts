@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { BankError, isHarness, loadBank, parseExercise, totalUnits, type CodeExercise, type HarnessExercise, type RecallExercise } from "./schema.js";
@@ -189,10 +189,13 @@ describe("loadBank", () => {
 });
 
 describe("loadBank multi-dir", () => {
+  /** Keys may contain a subdirectory ("nested/deep.json"); parent dirs are created. */
   function tempBank(files: Record<string, object>): string {
     const dir = mkdtempSync(join(tmpdir(), "atrophy-bank-"));
     for (const [name, ex] of Object.entries(files)) {
-      writeFileSync(join(dir, name), JSON.stringify(ex), "utf8");
+      const full = join(dir, name);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, JSON.stringify(ex), "utf8");
     }
     return dir;
   }
@@ -215,6 +218,41 @@ describe("loadBank multi-dir", () => {
     } finally {
       rmSync(a, { recursive: true, force: true });
       rmSync(b, { recursive: true, force: true });
+    }
+  });
+  it("tolerates the same root listed twice, loading each exercise once", () => {
+    const a = tempBank({ "a.json": valid, "b.json": { ...valid, id: "sr-py-002" } });
+    try {
+      expect(loadBank([a, a]).map((e) => e.id).sort()).toEqual(["sr-py-001", "sr-py-002"]);
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+    }
+  });
+  it("tolerates a root nested inside another root", () => {
+    const a = tempBank({ "a.json": valid, "packs/b.json": { ...valid, id: "sr-py-002" } });
+    try {
+      expect(loadBank([a, join(a, "packs")]).map((e) => e.id).sort()).toEqual(["sr-py-001", "sr-py-002"]);
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+    }
+  });
+  it("still fails on two files with the same id inside one directory, naming both", () => {
+    const a = tempBank({ "dup-a.json": valid, "dup-b.json": valid });
+    try {
+      // Order-independent: which file readdirSync yields first is filesystem-dependent.
+      expect(() => loadBank([a])).toThrowError(/duplicate exercise id: sr-py-001/);
+      expect(() => loadBank([a])).toThrowError(/dup-a\.json/);
+      expect(() => loadBank([a])).toThrowError(/dup-b\.json/);
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+    }
+  });
+  it("recurses into subdirectories of a root passed in the array form", () => {
+    const a = tempBank({ "nested/deep.json": { ...valid, id: "sr-py-003" } });
+    try {
+      expect(loadBank([a]).map((e) => e.id)).toEqual(["sr-py-003"]);
+    } finally {
+      rmSync(a, { recursive: true, force: true });
     }
   });
 });
