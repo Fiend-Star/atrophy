@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pc from "picocolors";
 import { loadBank, type CodeExercise } from "../bank/schema.js";
 import { grade, pythonCommand, solutionFileName } from "../engine/grader.js";
+import { MIN_JDK_MAJOR, javacCommand, missingJdkHint, parseJavaMajor } from "../engine/javatool.js";
 import { Store } from "../store/db.js";
 import { DEFAULT_LEADERBOARD_URL, syncDisabled } from "./publish.js";
 
@@ -77,6 +78,53 @@ export function checkPython(): CheckResult {
   };
 }
 
+/**
+ * The number people call this JDK. Legacy builds print "1.8.0_452" and
+ * parseJavaMajor faithfully returns 1; the 1.x scheme only ever covered Java
+ * 5-8, so the second component is the name to show a human.
+ */
+function humanMajor(major: number, versionOutput: string): number {
+  if (major !== 1) return major;
+  const legacy = /\b1\.(\d+)/.exec(versionOutput);
+  return legacy ? Number.parseInt(legacy[1]!, 10) : major;
+}
+
+/**
+ * The render half of `checkJava`, split out so the spawn is the only untested
+ * part. A JDK that answered but printed something we cannot parse still passes:
+ * a false alarm here is worse than a missed old JDK, which the compile step
+ * would report anyway.
+ */
+export function javaCheckResult(cmd: string, versionOutput: string): CheckResult {
+  const version = versionOutput.trim();
+  const major = parseJavaMajor(version);
+  if (major !== null && major < MIN_JDK_MAJOR) {
+    return {
+      name: "Java (JDK)",
+      status: "warn",
+      detail: `${cmd}: Java ${humanMajor(major, version)} - Java drills need JDK >= ${MIN_JDK_MAJOR} (Python/JavaScript drills are unaffected)`,
+    };
+  }
+  return { name: "Java (JDK)", status: "pass", detail: version ? `${cmd}: ${version}` : cmd };
+}
+
+/**
+ * JDK present and modern enough for Java drills. Warn-only: py/js drills are
+ * unaffected. Probes directly rather than via `hasJdk()`, whose per-process
+ * cache would answer for whatever ATROPHY_JAVA_HOME was set earlier in the run.
+ */
+export function checkJava(): CheckResult {
+  const cmd = javacCommand();
+  try {
+    const r = spawnSync(cmd, ["-version"], { encoding: "utf8", timeout: 10_000, windowsHide: true });
+    // JDK 8 prints -version to stderr; 9+ to stdout
+    if (r.status === 0) return javaCheckResult(cmd, r.stdout || r.stderr || "");
+  } catch {
+    /* fall through to warn */
+  }
+  return { name: "Java (JDK)", status: "warn", detail: missingJdkHint(cmd) };
+}
+
 /** The SQLite store opens and is writable. */
 export function checkDb(path: string): CheckResult {
   try {
@@ -87,10 +135,16 @@ export function checkDb(path: string): CheckResult {
   }
 }
 
-/** The exercise bank (base dir plus any packs merged on top) loads and is non-empty. */
-export function checkBank(dir: string | string[] | null): CheckResult {
+/**
+ * The exercise bank (base dir plus any packs merged on top) loads and is
+ * non-empty. `resolveError` is why the caller could not produce a dir at all -
+ * a missing *pack* fails resolution too, and reporting that as "set
+ * $ATROPHY_BANK" sends the user after the wrong file.
+ */
+export function checkBank(dir: string | string[] | null, resolveError?: string | null): CheckResult {
   if (!dir) {
-    return { name: "Exercise bank", status: "fail", detail: "bank directory not found (set $ATROPHY_BANK)" };
+    const detail = resolveError || "bank directory not found (set $ATROPHY_BANK)";
+    return { name: "Exercise bank", status: "fail", detail };
   }
   try {
     const bank = loadBank(dir);
@@ -100,6 +154,28 @@ export function checkBank(dir: string | string[] | null): CheckResult {
   } catch (err) {
     return { name: "Exercise bank", status: "fail", detail: (err as Error).message };
   }
+}
+
+/**
+ * Every configured pack directory exists and loads cleanly. Paths come back
+ * canonicalised by `packDirs`, so the report may show different casing than the
+ * user typed - that is the directory actually being read.
+ */
+export function checkPacks(dirs: string[]): CheckResult {
+  if (dirs.length === 0) return { name: "Packs", status: "pass", detail: "no packs configured" };
+  const parts: string[] = [];
+  for (const dir of dirs) {
+    if (!existsSync(dir)) {
+      return { name: "Packs", status: "fail", detail: `${dir}: not found (check $ATROPHY_PACKS / "packs" in your config)` };
+    }
+    try {
+      const n = loadBank(dir).length;
+      parts.push(`${dir}: ${n} exercise${n === 1 ? "" : "s"}`);
+    } catch (err) {
+      return { name: "Packs", status: "fail", detail: `${dir}: ${(err as Error).message}` };
+    }
+  }
+  return { name: "Packs", status: "pass", detail: parts.join(" · ") };
 }
 
 /** End-to-end sandbox check: grade a trivial correct solution in a subprocess. */
@@ -167,6 +243,9 @@ export function printResult(r: CheckResult): void {
 
 export interface DoctorDeps {
   bankDir: string | string[] | null;
+  /** Why `bankDir` is null, when the caller knows (see `checkBank`). */
+  bankError?: string | null;
+  packDirs: string[];
   dbPath: string;
 }
 
@@ -176,9 +255,11 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
   const results: CheckResult[] = [
     checkNode(),
     checkPython(),
+    checkJava(),
     checkEditor(),
     checkDb(deps.dbPath),
-    checkBank(deps.bankDir),
+    checkBank(deps.bankDir, deps.bankError),
+    checkPacks(deps.packDirs),
     await checkGrading(),
     await checkLeaderboard(),
   ];

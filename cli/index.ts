@@ -76,9 +76,13 @@ function parseLang(value: string): Language {
   return value as Language;
 }
 
-/** The axis most in need of a rep: never-tested first, then stalest. */
-function dueAxis(store: Store, bank: Exercise[]): Axis {
-  const available = availableAxes(bank);
+/**
+ * The axis most in need of a rep: never-tested first, then stalest. Scoped to
+ * `language` when one was asked for, so `--lang java` picks the stalest axis
+ * that actually has Java content instead of one that cannot be drilled.
+ */
+function dueAxis(store: Store, bank: Exercise[], language?: Language): Axis {
+  const available = availableAxes(bank, language);
   let best: Axis = available[0] ?? "syntax-recall";
   let bestTime = Infinity;
   for (const a of available) {
@@ -121,7 +125,7 @@ async function drillOnce(store: Store, flags: DrillFlags): Promise<boolean> {
       return false;
     }
   } else {
-    const axis = flags.axis ? parseAxis(flags.axis) : dueAxis(store, bank);
+    const axis = flags.axis ? parseAxis(flags.axis) : dueAxis(store, bank, language);
     const recent = store.recentSessions(axis, 6).map((s) => s.exercise_id);
     ex = selectExercise({
       statics: bank,
@@ -432,13 +436,22 @@ program
   .command("doctor")
   .description("diagnose your setup: runtime, editor, sandbox, exercise bank, database")
   .action(async () => {
-    let bd: string[] | null;
+    // Everything the doctor reports on can itself be broken, including the
+    // config it reads - resolve each input defensively so the report prints.
+    let bankDir: string[] | null = null;
+    let bankError: string | null = null;
     try {
-      bd = bankDirs();
-    } catch {
-      bd = null;
+      bankDir = bankDirs();
+    } catch (err) {
+      bankError = (err as Error).message;
     }
-    process.exitCode = await runDoctor({ bankDir: bd, dbPath: defaultDbPath() });
+    let packs: string[] = [];
+    try {
+      packs = packDirs();
+    } catch {
+      /* whatever broke here already surfaced as bankError */
+    }
+    process.exitCode = await runDoctor({ bankDir, bankError, packDirs: packs, dbPath: defaultDbPath() });
   });
 
 program
