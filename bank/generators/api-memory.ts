@@ -29,7 +29,7 @@ const NAME_POOLS = ["items", "values", "entries", "records", "nums"] as const;
 /** Java collection identifiers - plural, and never a java keyword. */
 const JAVA_NAME_POOLS = ["names", "words", "tags", "labels"] as const;
 
-/** Sampled when a java snippet needs small, distinct, overflow-proof numbers. */
+/** Sampled when a java snippet needs small, distinct numbers. */
 const DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
 
 function numList(rng: Rng, n: number, min = -9, max = 99): number[] {
@@ -266,13 +266,18 @@ const JS_FACTS: ClozeFact[] = [
 const JAVA_FACTS: ClozeFact[] = [
   {
     tier: 1,
-    title: "Count without a null check",
+    // Deliberately not the getOrDefault fact: static api-java-001 already teaches that
+    // one at this tier with this identifier scheme, and selection treats a static and a
+    // family as different families, so the pair could serve back-to-back. This is the
+    // other side of api-java-001's own prompt ("unlike computeIfAbsent, stores nothing").
+    title: "One list per key",
     prompt:
-      "Fill the blank: the Map method that reads a key's current count and yields 0 the first time a key is seen, storing nothing itself.",
-    accepted: ["getOrDefault"],
+      "Fill the blank: the Map method that computes and stores the mapping on a key's first access and returns the existing one thereafter, so the .add() below always lands in a list the map is holding.",
+    accepted: ["computeIfAbsent"],
     render: (rng) => {
-      const item = pick(rng, ["word", "tag", "label"]);
-      return `Map<String, Integer> counts = new HashMap<>();\nfor (String ${item} : ${item}s) {\n    int c = counts.____(${item}, 0) + 1;\n    counts.put(${item}, c);\n}`;
+      const item = pick(rng, ["tag", "label", "user"]);
+      const map = `by${item[0]!.toUpperCase()}${item.slice(1)}`;
+      return `Map<String, List<Integer>> ${map} = new HashMap<>();\nfor (int i = 0; i < ${item}s.length; i++) {\n    ${map}.____(${item}s[i], k -> new ArrayList<>()).add(scores[i]);\n}`;
     },
   },
   {
@@ -351,14 +356,15 @@ const JAVA_FACTS: ClozeFact[] = [
       "Fill the blank: the Arrays method that reorders rows in place, sequentially, using the comparator it is handed.",
     accepted: ["sort"],
     render: (rng) => {
-      // Single digits keep the `a[0] - b[0]` comparator honest: subtraction on wide
-      // ints overflows, and a snippet cannot teach an idiom it gets wrong.
+      // Distinct keys, never already ascending: the sort has to visibly do something.
       const keys = sample(rng, DIGITS, 3);
       const rest = numList(rng, 3, 1, 9);
-      // Distinct keys, never already ascending: the sort has to visibly do something.
       if (keys[0]! < keys[1]! && keys[1]! < keys[2]!) keys.reverse();
       const rows = keys.map((k, i) => `{${k}, ${rest[i]}}`).join(", ");
-      return `int[][] rows = {${rows}};\nArrays.____(rows, (a, b) -> a[0] - b[0]);`;
+      // Integer.compare, never `a[0] - b[0]`: the subtraction form overflows on wide
+      // ints, and static api-java-004 teaches the correct ordering for these same
+      // int[] rows. Ambient code in a drill is still code the user reads as approved.
+      return `int[][] rows = {${rows}};\nArrays.____(rows, (a, b) -> Integer.compare(a[0], b[0]));`;
     },
   },
 ];

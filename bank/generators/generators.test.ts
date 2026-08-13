@@ -205,6 +205,10 @@ describe("generator contracts", () => {
         // Two blanks would make the answer ambiguous under exact-match grading, and
         // bank-integrity's `toContain("____")` cannot see the difference.
         expect(ex.snippet.match(/____/g), `${ex.id} t${tier}: not exactly one blank`).toHaveLength(1);
+        // Ambient code in a drill reads as approved code. The subtraction comparator
+        // is the canonical int-overflow bug, and static api-java-004 teaches the right
+        // ordering for these very int[] rows - the family must not contradict it.
+        expect(ex.snippet, `${ex.id}: subtraction comparator`).not.toMatch(/\w\[\d\]\s*-\s*\w\[\d\]/);
         expect(ex.acceptedAnswers.length).toBeGreaterThan(0);
         // Every answer is a bare java method name: no punctuation, no call parens,
         // nothing whose normalization could differ from what the user types.
@@ -239,13 +243,14 @@ describe("generator contracts", () => {
     expect(gradeCloze(stack, "offerFirst")).toBe(false);
     expect(gradeCloze(stack, "addLast")).toBe(false);
 
-    // The two-arg shape is what rules `get` out - Map.get takes one key, so the call
-    // would not even compile - and putIfAbsent returns the *previous* value, i.e. null
-    // on a first sighting, an NPE the moment it is unboxed into `int c`.
-    const counts = byTitle(1, "Count without a null check");
-    expect(gradeCloze(counts, "getOrDefault")).toBe(true);
-    expect(gradeCloze(counts, "get")).toBe(false);
-    expect(gradeCloze(counts, "putIfAbsent")).toBe(false);
+    // The lambda in the second argument is what pins computeIfAbsent: putIfAbsent and
+    // getOrDefault take a plain V there (a lambda is not a List), and compute /
+    // computeIfPresent want a two-arg BiFunction. None of them would compile.
+    const lists = byTitle(1, "One list per key");
+    expect(gradeCloze(lists, "computeIfAbsent")).toBe(true);
+    expect(gradeCloze(lists, "putIfAbsent")).toBe(false);
+    expect(gradeCloze(lists, "getOrDefault")).toBe(false);
+    expect(gradeCloze(lists, "computeIfPresent")).toBe(false);
 
     // "sequentially" in the prompt is what excludes parallelSort, which reorders the
     // same way through a different execution contract.
