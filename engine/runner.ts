@@ -37,7 +37,9 @@ export function run(
       // falls back to C:\Windows, which is not writable for user processes.
       ...(process.platform === "win32" && process.env.TEMP ? { TEMP: process.env.TEMP } : {}),
       ...(process.platform === "win32" && process.env.TMP ? { TMP: process.env.TMP } : {}),
-      ...(process.env.PYTHONIOENCODING ? {} : { PYTHONIOENCODING: "utf-8" }),
+      // Graded output must decode the same way everywhere, so the child always gets
+      // an explicit encoding - it inherits nothing from us. The parent's choice wins.
+      PYTHONIOENCODING: process.env.PYTHONIOENCODING ?? "utf-8",
       ...opts.env,
     };
     const child = spawn(cmd, args, {
