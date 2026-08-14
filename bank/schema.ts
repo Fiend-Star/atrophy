@@ -217,8 +217,15 @@ export type SqlWriteExercise = Extract<RawExercise, { kind: "write" }> & {
   language: "sql";
   cases: SqlCase[];
 };
-/** Every other write/fix: the `functionName` + `tests` pairing, made definite. */
+/**
+ * Every other write/fix: the `functionName` + `tests` pairing, made definite. The
+ * language exclusion is what makes `isSqlWrite` narrow soundly in the *false*
+ * direction: without it a hand-built `{ language: "sql", tests: [...] }` literal is
+ * assignable here, and the grader's sql check would then hand a `tests`-shaped
+ * exercise to the language lanes.
+ */
 export type TestedExercise = Extract<RawExercise, { kind: "write" | "fix" }> & {
+  language: Exclude<Language, "sql">;
   functionName: string;
   tests: TestCase[];
 };

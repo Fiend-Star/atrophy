@@ -10,6 +10,7 @@ import {
   checkJava,
   checkNode,
   checkPacks,
+  checkSql,
   javaCheckResult,
 } from "./doctor.js";
 
@@ -103,6 +104,17 @@ describe("checkDb", () => {
 describe("checkGrading", () => {
   it("passes the sandbox smoke test", async () => {
     expect((await checkGrading()).status).toBe("pass");
+  });
+});
+
+describe("checkSql", () => {
+  it("passes and names the bundled engine's version", () => {
+    const r = checkSql();
+    expect(r.name).toBe("SQL (SQLite)");
+    expect(r.status).toBe("pass");
+    // The version is the point: it tells a user reporting a grading difference which
+    // SQLite they actually ran, and there is no $ATROPHY_SQL to point them at instead.
+    expect(r.detail).toMatch(/better-sqlite3 \d+\.\d+/);
   });
 });
 

@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pc from "picocolors";
@@ -123,6 +124,24 @@ export function checkJava(): CheckResult {
     /* fall through to warn */
   }
   return { name: "Java (JDK)", status: "warn", detail: missingJdkHint(cmd) };
+}
+
+/**
+ * SQL drills need no toolchain of their own: the same better-sqlite3 the store runs on
+ * is the engine that grades them, so this reports a version rather than a search. It
+ * can only fail on an install so broken that `atrophy` itself would not have started.
+ */
+export function checkSql(): CheckResult {
+  try {
+    const pkg = createRequire(import.meta.url)("better-sqlite3/package.json") as { version?: string };
+    return {
+      name: "SQL (SQLite)",
+      status: "pass",
+      detail: `better-sqlite3 ${pkg.version ?? "(unknown version)"} - bundled, nothing to install`,
+    };
+  } catch (err) {
+    return { name: "SQL (SQLite)", status: "fail", detail: `better-sqlite3 not loadable: ${(err as Error).message}` };
+  }
 }
 
 /** The SQLite store opens and is writable. */
@@ -268,6 +287,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     checkNode(),
     checkPython(),
     checkJava(),
+    checkSql(),
     checkEditor(),
     checkDb(deps.dbPath),
     checkBank(deps.bankDir, deps.bankError),

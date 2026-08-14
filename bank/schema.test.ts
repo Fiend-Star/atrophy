@@ -215,6 +215,17 @@ describe("sql write shape", () => {
     expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "python", functionName: "f", starterCode: "def f(): pass", tests: [{ args: [], expected: 1 }], cases: sqlCases })).toThrow();
     expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "python", starterCode: "def f(): pass", tests: [{ args: [], expected: 1 }] })).toThrow(); // functionName still required off-sql
   });
+  it("accepts ordered on a sql write, and rejects it off sql in either state", () => {
+    const ex = exerciseSchema.parse({ ...base, kind: "write", language: "sql", starterCode: "-- q", cases: sqlCases, ordered: true });
+    expect(isSqlWrite(ex) && ex.ordered).toBe(true);
+    // The refinement tests `ordered !== undefined`, not truthiness, and that is
+    // load-bearing: `ordered: false` off sql is still a sql-only field being set on a
+    // python exercise, and a truthiness refactor would silently start accepting it.
+    const pyWith = (ordered: boolean) => () =>
+      exerciseSchema.parse({ ...base, kind: "write", language: "python", functionName: "f", starterCode: "def f(): pass", tests: [{ args: [], expected: 1 }], ordered });
+    expect(pyWith(true)).toThrow(/ordered is sql-only/);
+    expect(pyWith(false)).toThrow(/ordered is sql-only/);
+  });
   it("rejects sql on fix and predict-output", () => {
     // Pinned to the rule's own message: the fix fixture is invalid four ways over
     // (sql language, missing tests, missing functionName, sql-only cases), so a bare

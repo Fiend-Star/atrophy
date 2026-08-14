@@ -1,4 +1,5 @@
 import { copyFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import { isHarness, isSqlWrite } from "../bank/schema.js";
 import type {
@@ -7,6 +8,7 @@ import type {
   OutlineExercise,
   PredictExercise,
   RecallExercise,
+  SqlWriteExercise,
   TestedExercise,
 } from "../bank/schema.js";
 import {
@@ -41,6 +43,7 @@ const RESULT_MARKER = "ATROPHY_RESULT ";
 export function solutionFileName(ex: CodeLikeExercise | OutlineExercise): string {
   if (ex.kind === "outline") return "outline.md";
   if (ex.language === "java") return "Solution.java";
+  if (ex.language === "sql") return "solution.sql";
   return ex.language === "python" ? "solution.py" : "solution.js";
 }
 
@@ -131,6 +134,118 @@ tests.forEach((t, i) => {
 });
 emit({ passed, total, failures });
 `;
+}
+
+/**
+ * The result-set canonicalization the sql harness uses, kept as source text because
+ * that harness runs in a child process and cannot import the schema. On the unordered
+ * path it must agree byte-for-byte with `canonicalRows` in bank/schema.ts - that is the
+ * function deciding at parse time whether two cases are distinguishable, so a drift here
+ * would let an exercise ship whose cases the grader cannot actually tell apart.
+ * `grader.sql.test.ts` evaluates this string against it.
+ */
+export const SQL_CANON_SOURCE = `const canonicalRow = (row) => {
+  const sorted = {};
+  for (const key of Object.keys(row).sort()) sorted[key] = row[key];
+  return JSON.stringify(sorted);
+};
+const canonicalRows = (rows, ordered) => {
+  const canonical = rows.map(canonicalRow);
+  if (!ordered) canonical.sort();
+  return JSON.stringify(canonical);
+};`;
+
+/**
+ * sql write: run the user's query against every case's own fresh in-memory database
+ * and compare result sets. better-sqlite3 is a dependency of the CLI, not of the temp
+ * dir the child runs in, so the absolute resolved path is baked into the script.
+ */
+function sqlHarnessScript(ex: SqlWriteExercise, solutionFile: string): string {
+  const betterSqlitePath = createRequire(import.meta.url).resolve("better-sqlite3");
+  return `const path = require("node:path");
+const { readFileSync } = require("node:fs");
+let Database, sql;
+try {
+  Database = require(${JSON.stringify(betterSqlitePath)});
+  sql = readFileSync(path.join(__dirname, ${JSON.stringify(solutionFile)}), "utf8");
+} catch (err) {
+  // Deliberately no ATROPHY_RESULT line: a broken install is not evidence about the
+  // user, and parseMarker turns a marker-less run into a harnessError, not a 0/n.
+  console.error("sql harness could not start: " + String(err && err.message || err));
+  process.exit(1);
+}
+
+const cases = ${JSON.stringify(ex.cases)};
+const ordered = ${JSON.stringify(ex.ordered === true)};
+${SQL_CANON_SOURCE}
+const preview = (rows) => {
+  const s = JSON.stringify(rows);
+  return s.length > 300 ? s.slice(0, 300) + "..." : s;
+};
+
+let passed = 0;
+const failures = [];
+cases.forEach((c, i) => {
+  let db;
+  try {
+    db = new Database(":memory:");
+    db.exec(c.fixture);
+    // The fixture is bank-authored and has already run; everything after it is the
+    // user's answer, and an answer is a read. query_only turns a DELETE-then-SELECT
+    // "solution" into a named error instead of a pass.
+    db.pragma("query_only = 1");
+    const rows = db.prepare(sql).all();
+    if (canonicalRows(rows, ordered) === canonicalRows(c.expectedRows, ordered)) passed += 1;
+    else {
+      failures.push({
+        index: i,
+        error: "case " + (i + 1) + ": wrong rows" +
+          "\\n  expected: " + preview(c.expectedRows) +
+          "\\n  got:      " + preview(rows),
+      });
+    }
+  } catch (err) {
+    // A syntax error, a multi-statement submission or a write attempt is a failed
+    // case, not a crash: the other cases still run and the user still gets a score.
+    failures.push({ index: i, error: "case " + (i + 1) + ": " + String(err && err.message || err) });
+  } finally {
+    if (db) {
+      try { db.close(); } catch { /* the process is about to exit anyway */ }
+    }
+  }
+});
+console.log("ATROPHY_RESULT " + JSON.stringify({ passed, total: cases.length, failures }));
+`;
+}
+
+/** A sql write has no interpreter to find: SQLite is bundled, so this lane always runs. */
+async function gradeSql(ex: SqlWriteExercise, dir: string): Promise<GradeResult> {
+  const total = ex.cases.length;
+  const harnessName = "__atrophy_sql_harness__.cjs";
+  try {
+    writeFileSync(join(dir, harnessName), sqlHarnessScript(ex, solutionFileName(ex)), "utf8");
+  } catch (err) {
+    // resolve() of better-sqlite3 throws on a broken install, and the drill loop has
+    // no catch: report it the way gradeJavaTests reports a missing resource dir.
+    return {
+      passed: 0,
+      total,
+      failures: [],
+      harnessError: `could not stage the sql harness: ${(err as Error).message}`,
+    };
+  }
+  let result;
+  try {
+    result = await run(process.execPath, [harnessName], { cwd: dir, timeoutMs: ex.testTimeoutMs });
+  } catch (err) {
+    return {
+      passed: 0,
+      total,
+      failures: [],
+      harnessError: `could not start ${process.execPath}: ${(err as Error).message}`,
+    };
+  }
+  return parseMarker(result, total, ex.testTimeoutMs);
 }
 
 /**
@@ -300,16 +415,7 @@ async function gradeHarness(ex: HarnessExercise, dir: string): Promise<GradeResu
  */
 export async function grade(ex: CodeLikeExercise, dir: string): Promise<GradeResult> {
   if (isHarness(ex)) return gradeHarness(ex, dir);
-  if (isSqlWrite(ex)) {
-    // No sql lane yet: a case count is not a score, so report it as a broken install
-    // rather than handing back 0/n the user would read as their own failure.
-    return {
-      passed: 0,
-      total: ex.cases.length,
-      failures: [],
-      harnessError: "sql grading is not available in this build - please report this exercise",
-    };
-  }
+  if (isSqlWrite(ex)) return gradeSql(ex, dir);
   if (ex.language === "java") return gradeJavaTests(ex, dir);
 
   const isPy = ex.language === "python";

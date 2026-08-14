@@ -3,7 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ClozeExercise, CodeExercise, Exercise, HarnessExercise, RecallExercise } from "../bank/schema.js";
+import type {
+  ClozeExercise,
+  CodeExercise,
+  Exercise,
+  HarnessExercise,
+  RecallExercise,
+  SqlWriteExercise,
+} from "../bank/schema.js";
 import { hasJdk } from "./javatool.js";
 import { previewExercise, runDrill, type DrillOutcome } from "./session.js";
 
@@ -198,6 +205,40 @@ describe("runDrill - --solution when grading never ran", () => {
     expect(outcome.passed).toBe(0);
     expect(outcome.score).toBe(0);
     expect(lines.join("\n")).toContain("Your code did not run");
+  }, 30_000);
+});
+
+const sqlEx: SqlWriteExercise = {
+  id: "sr-sql-950",
+  kind: "write",
+  axis: "syntax-recall",
+  language: "sql",
+  tier: 1,
+  title: "sum per key",
+  prompt: "One row per k, with SUM(v) AS s.",
+  // Already the right answer: the only thing left that can fail is the file the
+  // session builds around it.
+  starterCode: "SELECT k, SUM(v) AS s FROM t GROUP BY k",
+  softTimeLimitSeconds: 300,
+  testTimeoutMs: 15_000,
+  cases: [
+    { fixture: "CREATE TABLE t(k TEXT, v INT); INSERT INTO t VALUES ('a',1),('a',2),('b',5);", expectedRows: [{ k: "a", s: 3 }, { k: "b", s: 5 }] },
+    { fixture: "CREATE TABLE t(k TEXT, v INT); INSERT INTO t VALUES ('z',7);", expectedRows: [{ k: "z", s: 7 }] },
+  ],
+};
+
+describe("runDrill - sql", () => {
+  it("grades the solution file the session generates, header comment and all", async () => {
+    // The header is not decoration: it is prepended to the file handed straight to
+    // db.prepare(). Every non-python language used to get "//", which SQLite rejects -
+    // so the drill would have died on its own header before reading the query.
+    // Two answers: the first Enter trips the "file hasn't changed" guard, the second
+    // submits the untouched starter.
+    const { outcome, output } = await driveDrill(sqlEx, ["", ""]);
+    expect(outcome.abandoned).toBe(false);
+    expect(outcome.passed).toBe(2);
+    expect(outcome.total).toBe(2);
+    expect(output).toContain("2/2 tests passed");
   }, 30_000);
 });
 

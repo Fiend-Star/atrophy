@@ -205,7 +205,12 @@ async function readMultiline(rl: Interface): Promise<string> {
 // ---------- write / fix (editor + hidden tests) ----------
 
 function commentPrefix(ex: CodeLikeExercise): string {
-  return ex.language === "python" ? "#" : "//";
+  if (ex.language === "python") return "#";
+  // sql is not a "//" language: the header below is prepended to the file the grader
+  // hands straight to db.prepare(), so the wrong prefix fails the drill before the
+  // user's query is even read.
+  if (ex.language === "sql") return "--";
+  return "//";
 }
 
 /** fix-shaped kinds hand the user buggy code; write-shaped kinds hand them a blank slate. */
