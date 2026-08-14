@@ -1,3 +1,4 @@
+import Database from "better-sqlite3";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +7,19 @@ import { afterAll, describe, expect, it } from "vitest";
 import { grade, gradePrediction, normalizeRecallAnswer, solutionFileName } from "../engine/grader.js";
 import { JAVA_COMPILE_TIMEOUT_MS, hasJdk, javacCommand } from "../engine/javatool.js";
 import { run } from "../engine/runner.js";
-import { JVM_KINDS, isHarness, loadBank, spawnsJvm, type CodeLikeExercise, type PredictExercise } from "./schema.js";
+import {
+  JVM_KINDS,
+  canonicalRows,
+  countBlanks,
+  isHarness,
+  isSqlWrite,
+  loadBank,
+  spawnsJvm,
+  type ClozeExercise,
+  type CodeLikeExercise,
+  type PredictExercise,
+  type SqlWriteExercise,
+} from "./schema.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 /**
@@ -70,9 +83,19 @@ describe("bank integrity", () => {
     }
   }, 120_000);
 
-  it("cloze blanks actually appear in their snippets", () => {
-    for (const ex of bank.filter((e) => e.kind === "cloze")) {
-      expect(ex.snippet, `${ex.id}: snippet has no ____ blank`).toContain("____");
+  it("cloze blanks actually appear in their snippets, and per-blank sets match them", () => {
+    for (const ex of bank.filter((e): e is ClozeExercise => e.kind === "cloze")) {
+      const blanks = countBlanks(ex.snippet);
+      expect(blanks, `${ex.id}: snippet has no ____ blank`).toBeGreaterThan(0);
+      // Only the nested shape has a count to check. The flat shape deliberately has none:
+      // one set fills however many blanks there are, which is what several shipped
+      // exercises rely on (two blanks, one shared set of answers).
+      if (Array.isArray(ex.acceptedAnswers[0])) {
+        expect(
+          ex.acceptedAnswers.length,
+          `${ex.id}: per-blank acceptedAnswers needs one set per ____ blank (blanks: ${blanks})`,
+        ).toBe(blanks);
+      }
     }
   });
 
@@ -86,6 +109,159 @@ describe("bank integrity", () => {
       }
     }
   });
+});
+
+/** Grade one hand-written query exactly the way a submission is graded (subprocess and all). */
+async function gradeSqlSource(ex: SqlWriteExercise, sql: string) {
+  const dir = scratch();
+  writeFileSync(join(dir, solutionFileName(ex)), sql, "utf8");
+  return grade(ex, dir);
+}
+
+/** A SQLite literal for one expected value - the building block of the hardcode cheese. */
+function sqlLiteral(value: unknown): string {
+  if (value === null) return "NULL";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+const quoteIdent = (name: string) => `"${name.replace(/"/g, '""')}"`;
+
+/** Integers past this are already a different number by the time JSON.parse is done. */
+const MAX_EXACT_INTEGER = 2 ** 53;
+
+/**
+ * Everything a fixture built: its schema, plus every user table's contents canonicalized
+ * the way a result set is. Two fixtures that produce the same snapshot produce the same
+ * database, whatever order the rows went in.
+ */
+function fixtureSnapshot(fixture: string): string {
+  const db = new Database(":memory:");
+  try {
+    db.exec(fixture);
+    const schema = db
+      .prepare("SELECT type, name, sql FROM sqlite_master ORDER BY type, name")
+      .all() as { type: string; name: string; sql: string | null }[];
+    const data = schema
+      .filter((o) => o.type === "table" && !o.name.startsWith("sqlite_"))
+      .map((t) => [
+        t.name,
+        canonicalRows(db.prepare(`SELECT * FROM ${quoteIdent(t.name)}`).all() as Record<string, unknown>[]),
+      ]);
+    return JSON.stringify([schema, data]);
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * sql needs no toolchain gate the way java does - better-sqlite3 is a dependency of the
+ * CLI itself, so any machine that can run atrophy can validate sql content. These gates
+ * are vacuous on the built-in bank until the first sql statics land (spec §3.5 adds the
+ * `sqlWrites > 0` vacuity arm in that same commit, deliberately not before: a bank with
+ * no sql yet would fail such an arm on the truth). Every pack validated through
+ * ATROPHY_BANK is held to them from today.
+ */
+describe("bank integrity - sql", () => {
+  const sqlWrites = bank.filter(isSqlWrite);
+
+  it("every fixture applies cleanly and builds the same database twice", () => {
+    for (const ex of sqlWrites) {
+      for (const [i, c] of ex.cases.entries()) {
+        const where = `${ex.id} case ${i + 1}`;
+        // A fixture that will not apply voids the whole attempt at grade time (gradeSql
+        // reports an exercise bug rather than a score), so the user gets nothing at all.
+        const build = () => {
+          try {
+            return fixtureSnapshot(c.fixture);
+          } catch (err) {
+            throw new Error(`${where}: fixture does not apply cleanly: ${(err as Error).message}`);
+          }
+        };
+        // Twice, into two fresh databases: a fixture that seeds with random() or now()
+        // expects rows that are only right on some runs.
+        expect(build(), `${where}: fixture builds a different database on a second run`).toBe(build());
+      }
+    }
+  });
+
+  it("at least two cases expect different rows", () => {
+    // The schema refuses this at parse time; re-asserted here because it is the premise
+    // every other sql gate leans on - one indistinguishable pair and the drill is
+    // answerable by a literal.
+    for (const ex of sqlWrites) {
+      const canon = new Set(ex.cases.map((c) => canonicalRows(c.expectedRows)));
+      expect(canon.size, `${ex.id}: every case expects the same rows`).toBeGreaterThan(1);
+    }
+  });
+
+  it("every expected value is a JSON scalar, and integers stay exact", () => {
+    for (const ex of sqlWrites) {
+      for (const [i, c] of ex.cases.entries()) {
+        for (const row of c.expectedRows) {
+          for (const [column, value] of Object.entries(row)) {
+            const where = `${ex.id} case ${i + 1}, column ${column}`;
+            // canonicalRows sorts top-level keys only, so a nested object's own key order
+            // would decide equality - and no SQLite column returns an object or an array
+            // anyway, so such a value is unmatchable by any query.
+            const scalar = value === null || ["string", "number", "boolean"].includes(typeof value);
+            expect(scalar, `${where}: expected values must be JSON scalars, got ${JSON.stringify(value)}`).toBe(
+              true,
+            );
+            if (typeof value !== "number") continue;
+            expect(Number.isFinite(value), `${where}: ${String(value)} is not a finite number`).toBe(true);
+            // Same rule as java's `tests`: the exercise JSON goes through Node's JSON.parse
+            // long before grading, so a bigger integer is already a different number here.
+            if (Number.isInteger(value)) {
+              expect(
+                Math.abs(value),
+                `${where}: integer ${value} is past 2^53 and cannot round-trip`,
+              ).toBeLessThanOrEqual(MAX_EXACT_INTEGER);
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("the hardcoded-literal cheese cannot pass every case", async () => {
+    for (const ex of sqlWrites) {
+      // spec §2.4(c): the cheese is rebuilt from the FIRST case that expects any rows.
+      // A bank where no case does is already impossible - the gate above rejects it.
+      const sourceIndex = ex.cases.findIndex((c) => c.expectedRows.length > 0);
+      const source = ex.cases[sourceIndex];
+      expect(source, `${ex.id}: every case expects zero rows - nothing to hardcode from`).toBeDefined();
+      if (!source) continue;
+      const columns = Object.keys(source.expectedRows[0] ?? {});
+      expect(columns.length, `${ex.id}: case ${sourceIndex + 1} expects rows with no columns`).toBeGreaterThan(0);
+      const cheese = source.expectedRows
+        .map((row) => `SELECT ${columns.map((c) => `${sqlLiteral(row[c])} AS ${quoteIdent(c)}`).join(", ")}`)
+        .join(" UNION ALL ");
+
+      const r = await gradeSqlSource(ex, cheese);
+      // Without these two, the gate below passes on a cheese that never ran: a broken
+      // fixture (harnessError) or a cheese SQLite refuses to parse both score 0.
+      expect(r.harnessError, `${ex.id}: ${r.harnessError}`).toBeUndefined();
+      for (const f of r.failures) {
+        expect(f.error, `${ex.id}: the cheese did not run as a query: ${f.error}`).toContain("wrong rows");
+      }
+      if (!ex.ordered) {
+        // The cheese is this case's own rows, written out as literals, so it must
+        // reproduce it. When it does not, an expected value is one no query can return
+        // either (a JSON `true` comes back from SQLite as 1) - unmatchable, not cheese-proof.
+        // Skipped for ordered drills only because UNION ALL's row order is unspecified.
+        expect(
+          r.failures.map((f) => f.index),
+          `${ex.id}: case ${sourceIndex + 1}'s own rows as literals do not reproduce it`,
+        ).not.toContain(sourceIndex);
+      }
+      // The letter of §2.4(c). The distinct-cases rule above already implies it - fixed
+      // rows can match at most one of two distinct expectations - so this stays as the
+      // statement of intent, and the two checks above are what actually catch a bad bank.
+      expect(r.passed, `${ex.id}: a hardcoded literal passes every case`).toBeLessThan(ex.cases.length);
+    }
+  }, 120_000);
 });
 
 const javaCode = bank.filter(
