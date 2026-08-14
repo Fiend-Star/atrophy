@@ -9,6 +9,7 @@ import type {
   HarnessExercise,
   PredictExercise,
   RecallExercise,
+  TestedExercise,
 } from "../bank/schema.js";
 import {
   grade,
@@ -232,14 +233,14 @@ describe.skipIf(!hasJdk())("grade - java", () => {
 });
 
 describe.skipIf(!hasJdk())("grade - java type matrix", () => {
-  const matrix: CodeExercise = {
+  const matrix: TestedExercise = {
     ...javaEx,
     id: "sr-java-902",
     functionName: "probe",
     starterCode: "x",
     tests: [],
   };
-  async function gradeWith(solution: string, tests: CodeExercise["tests"]): Promise<ReturnType<typeof grade> extends Promise<infer R> ? R : never> {
+  async function gradeWith(solution: string, tests: TestedExercise["tests"]): Promise<ReturnType<typeof grade> extends Promise<infer R> ? R : never> {
     const dir = scratch();
     const ex = { ...matrix, tests };
     writeSolution(dir, ex, solution);

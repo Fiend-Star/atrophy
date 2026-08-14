@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { grade, gradePrediction, normalizeRecallAnswer, solutionFileName } from "../engine/grader.js";
 import { JAVA_COMPILE_TIMEOUT_MS, hasJdk, javacCommand } from "../engine/javatool.js";
 import { run } from "../engine/runner.js";
-import { isHarness, loadBank, type CodeLikeExercise, type PredictExercise } from "./schema.js";
+import { JVM_KINDS, isHarness, loadBank, type CodeLikeExercise, type PredictExercise } from "./schema.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 /**
@@ -89,14 +89,16 @@ describe("bank integrity", () => {
 });
 
 /**
- * Kinds whose grading starts a JVM. The schema's 10s default `testTimeoutMs` is a
- * flake factory once javac + JVM cold start are on the clock, so java content is
- * held to a floor. Static JSON only - this lint spawns nothing and stays ungated.
+ * Kinds whose grading starts a JVM. The schema's `JVM_KINDS` are the compiled ones;
+ * predict-output joins them here because the single-file source launcher pays the same
+ * cold start. The schema's 10s default `testTimeoutMs` is a flake factory once javac +
+ * JVM startup are on the clock, so java content is held to a floor. Static JSON only -
+ * this lint spawns nothing and stays ungated.
  */
-const JVM_KINDS = new Set(["write", "fix", "write-harness", "fix-harness", "predict-output"]);
+const JVM_SPAWNING_KINDS = new Set<string>([...JVM_KINDS, "predict-output"]);
 
 describe("java timeout floors", () => {
-  const javaJvm = bank.filter((ex) => ex.language === "java" && JVM_KINDS.has(ex.kind));
+  const javaJvm = bank.filter((ex) => ex.language === "java" && JVM_SPAWNING_KINDS.has(ex.kind));
 
   it("the built-in bank ships JVM-graded java exercises at all", () => {
     // Every java check in this file - the floors here and the whole JDK-gated describe
@@ -119,9 +121,9 @@ describe("java timeout floors", () => {
   });
 });
 
+const javaGradedKinds = new Set<string>(JVM_KINDS);
 const javaCode = bank.filter(
-  (e): e is CodeLikeExercise =>
-    (e.kind === "write" || e.kind === "fix" || isHarness(e)) && e.language === "java",
+  (e): e is CodeLikeExercise => javaGradedKinds.has(e.kind) && e.language === "java",
 );
 const javaPredicts = bank.filter(
   (e): e is PredictExercise => e.kind === "predict-output" && e.language === "java",

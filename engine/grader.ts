@@ -1,13 +1,14 @@
 import { copyFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { isHarness, isSqlWrite } from "../bank/schema.js";
 import type {
   ClozeExercise,
-  CodeExercise,
   CodeLikeExercise,
   HarnessExercise,
   OutlineExercise,
   PredictExercise,
   RecallExercise,
+  TestedExercise,
 } from "../bank/schema.js";
 import {
   JAVA_COMPILE_TIMEOUT_MS,
@@ -49,7 +50,7 @@ export function pythonCommand(): string {
   return process.platform === "win32" ? "python" : "python3";
 }
 
-function pythonHarness(ex: CodeExercise): string {
+function pythonHarness(ex: TestedExercise): string {
   const tests = JSON.stringify(ex.tests);
   return `import importlib.util, json, sys, traceback
 
@@ -90,7 +91,7 @@ print("ATROPHY_RESULT " + json.dumps({"passed": passed, "total": len(tests),
 `;
 }
 
-function nodeHarness(ex: CodeExercise): string {
+function nodeHarness(ex: TestedExercise): string {
   const tests = JSON.stringify(ex.tests);
   return `const path = require("node:path");
 let fn;
@@ -233,7 +234,7 @@ async function compileAndRunJava(
 }
 
 /** Java write/fix: the shipped reflection harness reads tests.json and calls Solution. */
-async function gradeJavaTests(ex: CodeExercise, dir: string): Promise<GradeResult> {
+async function gradeJavaTests(ex: TestedExercise, dir: string): Promise<GradeResult> {
   const total = ex.tests.length;
   try {
     copyFileSync(join(javaResourceDir(), "Harness.java"), join(dir, "Harness.java"));
@@ -299,7 +300,17 @@ async function gradeHarness(ex: HarnessExercise, dir: string): Promise<GradeResu
  * Writes the language harness next to it and runs it in a subprocess.
  */
 export async function grade(ex: CodeLikeExercise, dir: string): Promise<GradeResult> {
-  if (ex.kind === "write-harness" || ex.kind === "fix-harness") return gradeHarness(ex, dir);
+  if (isHarness(ex)) return gradeHarness(ex, dir);
+  if (isSqlWrite(ex)) {
+    // No sql lane yet: a case count is not a score, so report it as a broken install
+    // rather than handing back 0/n the user would read as their own failure.
+    return {
+      passed: 0,
+      total: ex.cases.length,
+      failures: [],
+      harnessError: "sql grading is not available in this build - please report this exercise",
+    };
+  }
   if (ex.language === "java") return gradeJavaTests(ex, dir);
 
   const isPy = ex.language === "python";

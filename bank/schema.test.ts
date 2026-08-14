@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { BankError, isHarness, loadBank, parseExercise, totalUnits, type CodeExercise, type HarnessExercise, type RecallExercise } from "./schema.js";
+import { BankError, exerciseSchema, isHarness, isSqlWrite, JVM_KINDS, loadBank, parseExercise, totalUnits, type CodeExercise, type HarnessExercise, type RecallExercise } from "./schema.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 
@@ -176,6 +176,42 @@ describe("submitPolicy", () => {
     expect(loop.submitPolicy).toBe("loop");
     expect((parseExercise(JSON.stringify(harness)) as HarnessExercise).submitPolicy).toBeUndefined();
     expect(() => parseExercise(JSON.stringify({ ...harness, submitPolicy: "yolo" }))).toThrow(/submitPolicy/);
+  });
+});
+
+const base = {
+  id: "sr-sql-901", axis: "syntax-recall", tier: 1, title: "t", prompt: "p",
+  softTimeLimitSeconds: 60,
+};
+const sqlCases = [
+  { fixture: "CREATE TABLE t(a INT); INSERT INTO t VALUES (1);", expectedRows: [{ a: 1 }] },
+  { fixture: "CREATE TABLE t(a INT); INSERT INTO t VALUES (2);", expectedRows: [{ a: 2 }] },
+];
+
+describe("sql write shape", () => {
+  it("accepts a well-formed sql write (cases, no tests/functionName)", () => {
+    const ex = exerciseSchema.parse({ ...base, kind: "write", language: "sql", starterCode: "-- q", cases: sqlCases });
+    expect(isSqlWrite(ex)).toBe(true);
+    expect(totalUnits(ex)).toBe(2);
+  });
+  it("rejects sql write with tests or functionName", () => {
+    expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "sql", starterCode: "-- q", cases: sqlCases, functionName: "f" })).toThrow();
+    expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "sql", starterCode: "-- q", cases: sqlCases, tests: [{ args: [], expected: 1 }] })).toThrow();
+  });
+  it("rejects sql write with < 2 cases or all-identical expectedRows", () => {
+    expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "sql", starterCode: "-- q", cases: [sqlCases[0]] })).toThrow();
+    expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "sql", starterCode: "-- q", cases: [sqlCases[0], sqlCases[0]] })).toThrow();
+  });
+  it("rejects non-sql write with cases/ordered, and keeps today's contract intact", () => {
+    expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "python", functionName: "f", starterCode: "def f(): pass", tests: [{ args: [], expected: 1 }], cases: sqlCases })).toThrow();
+    expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "python", starterCode: "def f(): pass", tests: [{ args: [], expected: 1 }] })).toThrow(); // functionName still required off-sql
+  });
+  it("rejects sql on fix and predict-output", () => {
+    expect(() => exerciseSchema.parse({ ...base, kind: "fix", language: "sql", starterCode: "-- q", cases: sqlCases })).toThrow();
+    expect(() => exerciseSchema.parse({ ...base, kind: "predict-output", language: "sql", snippet: "SELECT 1;" })).toThrow();
+  });
+  it("exports JVM_KINDS as the four java-graded kinds", () => {
+    expect([...JVM_KINDS]).toEqual(["write", "fix", "write-harness", "fix-harness"]);
   });
 });
 

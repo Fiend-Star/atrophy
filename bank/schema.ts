@@ -10,7 +10,15 @@ export const AXES = [
   "decomposition",
 ] as const;
 
-export const LANGUAGES = ["python", "javascript", "java"] as const;
+export const LANGUAGES = ["python", "javascript", "java", "sql"] as const;
+
+/**
+ * Kinds whose java grading compiles and runs a JVM (javac + java). `predict-output`
+ * spawns one too, but through the single-file source launcher, so it shares neither
+ * the compile step nor the harness staging these four do.
+ */
+export const JVM_KINDS = ["write", "fix", "write-harness", "fix-harness"] as const;
+export type JvmKind = (typeof JVM_KINDS)[number];
 
 export const testCaseSchema = z.object({
   /** Arguments passed to the exercise function, JSON-encodable. */
@@ -18,6 +26,30 @@ export const testCaseSchema = z.object({
   /** Expected return value, compared by canonical JSON equality. */
   expected: z.unknown(),
 });
+export type TestCase = z.infer<typeof testCaseSchema>;
+
+/** One sql case: a fixture that builds the tables, and the rows the query must return. */
+export const sqlCaseSchema = z.object({
+  /** DDL + INSERTs applied to a fresh in-memory database before the query runs. */
+  fixture: z.string().min(1),
+  /** Expected result set; column names are part of the answer. */
+  expectedRows: z.array(z.record(z.string(), z.unknown())),
+});
+export type SqlCase = z.infer<typeof sqlCaseSchema>;
+
+/**
+ * Canonical form of a result set: each row stringified with its keys sorted, then the
+ * rows themselves sorted so row order cannot change the string. Two result sets are the
+ * same answer (order ignored) exactly when their canonical forms are equal.
+ */
+export function canonicalRows(rows: readonly Record<string, unknown>[]): string {
+  const canonicalRow = (row: Record<string, unknown>) => {
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(row).sort()) sorted[key] = row[key];
+    return JSON.stringify(sorted);
+  };
+  return JSON.stringify(rows.map(canonicalRow).sort());
+}
 
 const baseFields = {
   // static: sr-py-001 · generated: sr-py-cond-1a2b3c (family + hex seed)
@@ -37,15 +69,25 @@ const baseFields = {
 /** "single" = whiteboard mode: exactly one graded submission, no fix-and-resubmit loop. Absent means "loop". */
 const submitPolicySchema = z.enum(["loop", "single"]).optional();
 
-/** Kinds where the user edits code that gets run against hidden tests. */
+/**
+ * Kinds where the user edits code that gets run against hidden tests - except sql
+ * writes, which have no function to call and are graded by `cases` instead. The
+ * either/or is not expressible in the object shape, so the fields are optional here
+ * and the refinement below decides which set an exercise must carry.
+ */
 const codeFields = {
   ...baseFields,
   language: z.enum(LANGUAGES),
-  /** Name of the function the harness will call. */
-  functionName: z.string().min(1),
+  /** Name of the function the harness will call. Required off sql. */
+  functionName: z.string().min(1).optional(),
   /** Written into the solution file the user edits (for "fix": the buggy code). */
   starterCode: z.string().min(1),
-  tests: z.array(testCaseSchema).min(1),
+  /** Hidden tests. Required off sql. */
+  tests: z.array(testCaseSchema).min(1).optional(),
+  /** sql only: fixtures + the rows the query must return. Two, so a literal cannot pass. */
+  cases: z.array(sqlCaseSchema).min(2).optional(),
+  /** sql only: when true, row order is part of the answer (ORDER BY drills). */
+  ordered: z.boolean().optional(),
   submitPolicy: submitPolicySchema,
 };
 
@@ -62,7 +104,7 @@ const harnessFields = {
   submitPolicy: submitPolicySchema,
 };
 
-export const exerciseSchema = z.discriminatedUnion("kind", [
+const exerciseUnion = z.discriminatedUnion("kind", [
   /** Syntax recall: write a function from spec. */
   z.object({ kind: z.literal("write"), ...codeFields }),
   /** Debugging: starterCode contains a planted bug; make the tests pass. */
@@ -104,8 +146,64 @@ export const exerciseSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-export type Exercise = z.infer<typeof exerciseSchema>;
-export type CodeExercise = Extract<Exercise, { kind: "write" | "fix" }>;
+/**
+ * Cross-field rules the discriminated union cannot state on its own. Only a sql write
+ * carries `cases`; every other write/fix carries `tests` + `functionName`. sql exists
+ * as a language for that one kind: there is nothing to "fix" in a query the user never
+ * wrote, and a query has no stdout to predict.
+ */
+const refinedUnion = exerciseUnion.superRefine((ex, ctx) => {
+  const reject = (path: string, message: string) => ctx.addIssue({ code: "custom", path: [path], message });
+  const sqlIsWriteOnly = "sql is only supported on write exercises";
+
+  if (ex.kind === "write" && ex.language === "sql") {
+    if (ex.tests) reject("tests", "sql exercises have no hidden tests - grade them with cases");
+    if (ex.functionName) reject("functionName", "sql exercises have no function to call");
+    if (!ex.cases) reject("cases", "sql exercises are graded by cases, which is required");
+    // Two cases that expect the same rows are one case: a hardcoded literal passes both,
+    // which is exactly the answer the drill exists to rule out.
+    else if (new Set(ex.cases.map((c) => canonicalRows(c.expectedRows))).size < 2) {
+      reject("cases", "at least two cases must expect different rows, or a hardcoded answer passes");
+    }
+    return;
+  }
+  if (ex.kind === "write" || ex.kind === "fix") {
+    if (ex.language === "sql") reject("language", sqlIsWriteOnly);
+    if (!ex.tests) reject("tests", "tests are required");
+    if (!ex.functionName) reject("functionName", "functionName is required");
+    if (ex.cases) reject("cases", "cases is sql-only");
+    if (ex.ordered !== undefined) reject("ordered", "ordered is sql-only");
+    return;
+  }
+  if (ex.kind === "predict-output" && ex.language === "sql") reject("language", sqlIsWriteOnly);
+});
+
+/** What the object shapes alone say: write/fix with every graded field optional. */
+type RawExercise = z.infer<typeof refinedUnion>;
+/** The sql shape of a write: graded by `cases`, never by hidden tests. */
+export type SqlWriteExercise = Extract<RawExercise, { kind: "write" }> & {
+  language: "sql";
+  cases: SqlCase[];
+};
+/** Every other write/fix: the `functionName` + `tests` pairing, made definite. */
+export type TestedExercise = Extract<RawExercise, { kind: "write" | "fix" }> & {
+  functionName: string;
+  tests: TestCase[];
+};
+/**
+ * write/fix, split into the two graded shapes. Keeping the split in `Exercise` itself
+ * is what lets `isSqlWrite` narrow in *both* directions, so a consumer reading `tests`
+ * needs no assertion - the refinement above is what makes that sound, and
+ * `parseExercise` is the only door these types come through.
+ */
+export type CodeExercise = SqlWriteExercise | TestedExercise;
+export type Exercise = Exclude<RawExercise, { kind: "write" | "fix" }> | CodeExercise;
+
+/**
+ * Parsing is the only place the split above can be established: the refinement has just
+ * proved it, and zod cannot say so in the inferred type. Identity at runtime.
+ */
+export const exerciseSchema = refinedUnion.transform((ex): Exercise => ex as Exercise);
 export type HarnessExercise = Extract<Exercise, { kind: "write-harness" | "fix-harness" }>;
 /** Anything the user edits as a solution file, hidden-test or harness graded. */
 export type CodeLikeExercise = CodeExercise | HarnessExercise;
@@ -120,6 +218,11 @@ export function isCode(ex: Exercise): ex is CodeExercise {
   return ex.kind === "write" || ex.kind === "fix";
 }
 
+/** The sql write shape: `cases` in, `tests`/`functionName` out. */
+export function isSqlWrite(ex: Exercise): ex is SqlWriteExercise {
+  return ex.kind === "write" && ex.language === "sql";
+}
+
 export function isHarness(ex: Exercise): ex is HarnessExercise {
   return ex.kind === "write-harness" || ex.kind === "fix-harness";
 }
@@ -129,7 +232,7 @@ export function totalUnits(ex: Exercise): number {
   switch (ex.kind) {
     case "write":
     case "fix":
-      return ex.tests.length;
+      return isSqlWrite(ex) ? ex.cases.length : ex.tests.length;
     case "write-harness":
     case "fix-harness":
       return ex.totalChecks;
