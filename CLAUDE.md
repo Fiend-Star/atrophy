@@ -56,7 +56,7 @@ Data flows in one direction: `bank` (content) → `engine` (logic) → `store` (
 
 ## Contributing exercises
 
-The most common contribution: one JSON file under `bank/exercises/<axis>/`, id matching the folder's prefix scheme (e.g. `dbg-py-005`), validated by `bank/schema.ts` and gated by the integrity tests above. Run `npm test` before pushing — a broken exercise cannot merge.
+The most common contribution: one JSON file under `bank/exercises/<axis>/`, id matching the folder's prefix scheme (e.g. `dbg-py-005`; the java statics are `sr-java-`/`dbg-java-`/`cr-java-`/`api-java-`/`dec-java-`, and the java generator families are `sr-java-cond`/`dbg-java-scan`/`cr-java-trace`/`api-java-blank`), validated by `bank/schema.ts` and gated by the integrity tests above. Run `npm test` before pushing — a broken exercise cannot merge.
 
 Java authoring rules the harness enforces (each surfaces as a named grading error, not a crash — but the exercise is still wrong):
 

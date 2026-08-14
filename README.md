@@ -65,7 +65,7 @@ Not every skill is "write code against tests" - see the table below.
 | **API memory** | Fill in the blanked-out stdlib call | Answer match |
 | **Decomposition** | Outline a design (rate limiter, folder sync…) in bullets | You score yourself against a revealed rubric |
 
-The built-in bank is Python and JavaScript across three difficulty tiers - a
+The built-in bank spans Python, JavaScript and Java across three tiers - a
 hand-written static bank plus **generator families that render endless fresh
 variants** (randomized data, names, and twists; same seed always reproduces
 the same exercise). Difficulty targets *you*: each drill picks the tier where
@@ -75,8 +75,9 @@ most information. Comfortable wins teach the rating nothing.
 Java drills are graded too (`--lang java`, needs a JDK - see Install), and
 they add one more kind: a **behavioral** drill where the exercise ships its
 own Java test harness, so it can grade concurrency - races, deadlocks,
-visibility - instead of a return value. No Java exercises ship in the
-built-in bank yet; today you add them yourself as a pack (see Packs).
+visibility - instead of a return value. Java ships on every skill - 21 static
+exercises plus four generator families - and you can add more of your own as
+a pack (see Packs).
 
 ## The dashboard
 
