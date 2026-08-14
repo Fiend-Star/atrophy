@@ -2,7 +2,6 @@ import { copyFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isHarness, isSqlWrite } from "../bank/schema.js";
 import type {
-  ClozeExercise,
   CodeLikeExercise,
   HarnessExercise,
   OutlineExercise,
@@ -412,16 +411,6 @@ export async function gradePrediction(
     return { correct: false, credit: WHITESPACE_PARTIAL_CREDIT, whitespaceOnly: true, actual };
   }
   return { correct: false, credit: 0, whitespaceOnly: false, actual };
-}
-
-/** Trim + collapse inner whitespace; cloze answers stay case-sensitive (API names are). */
-export function normalizeClozeAnswer(s: string): string {
-  return s.trim().replace(/\s+/g, " ");
-}
-
-export function gradeCloze(ex: ClozeExercise, answer: string): boolean {
-  const norm = normalizeClozeAnswer(answer);
-  return ex.acceptedAnswers.some((a) => normalizeClozeAnswer(a) === norm);
 }
 
 /**

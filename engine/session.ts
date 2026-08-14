@@ -14,8 +14,14 @@ import {
   type RecallExercise,
 } from "../bank/schema.js";
 import {
-  grade,
+  acceptedForBlank,
+  blankResults,
+  countBlanks,
   gradeCloze,
+  promptCount,
+} from "./cloze.js";
+import {
+  grade,
   gradePrediction,
   gradeRecall,
   solutionFileName,
@@ -104,11 +110,13 @@ export function previewExercise(ex: Exercise): void {
       console.log(pc.dim("─".repeat(60)));
       console.log(pc.dim("(you would predict this program's exact stdout)"));
       break;
-    case "cloze":
+    case "cloze": {
       console.log(ex.snippet.trimEnd());
       console.log(pc.dim("─".repeat(60)));
-      console.log(pc.dim("(you would fill the ____ blank)"));
+      const blanks = countBlanks(ex.snippet);
+      console.log(pc.dim(blanks > 1 ? `(you would fill the ${blanks} ____ blanks)` : "(you would fill the ____ blank)"));
       break;
+    }
     case "outline":
       console.log(pc.dim(`(you would outline an approach, self-scored against ${ex.rubric.length} rubric points)`));
       break;
@@ -387,32 +395,52 @@ async function predictDrill(ex: PredictExercise, solutionOverride?: string): Pro
   });
 }
 
-// ---------- cloze (fill in the blank) ----------
+// ---------- cloze (fill in the blanks) ----------
 
 async function clozeDrill(ex: ClozeExercise, solutionOverride?: string): Promise<DrillOutcome> {
   const started = Date.now();
   const elapsed = () => (Date.now() - started) / 1000;
+  // One ask per blank when the exercise lists answers per blank; one ask total when a
+  // single answer fills them all. Blanks are graded units either way.
+  const asks = promptCount(ex);
+  const blanks = countBlanks(ex.snippet);
+
+  const finish = (answers: string[]): DrillOutcome => {
+    const { blanksCorrect, totalBlanks } = gradeCloze(ex, answers);
+    if (blanksCorrect === totalBlanks) {
+      console.log(pc.green("\n✓ correct") + pc.dim(` in ${Math.round(elapsed())}s`));
+    } else if (asks === 1) {
+      console.log(pc.red("\n✗ nope.") + ` Accepted: ${acceptedForBlank(ex, 0).join(" | ")}`);
+    } else {
+      console.log(pc.red(`\n✗ ${blanksCorrect}/${totalBlanks} blanks correct.`));
+      blankResults(ex, answers).forEach((ok, i) => {
+        if (!ok) console.log(pc.dim(`  blank ${i + 1} accepted: ${acceptedForBlank(ex, i).join(" | ")}`));
+      });
+    }
+    return makeOutcome(ex, blanksCorrect, elapsed());
+  };
 
   if (solutionOverride) {
-    const answer = readFileSync(solutionOverride, "utf8").split(/\r?\n/)[0] ?? "";
-    return makeOutcome(ex, gradeCloze(ex, answer) ? 1 : 0, elapsed());
+    // One answer per line, in blank order; a short file leaves the rest unfilled.
+    const lines = readFileSync(solutionOverride, "utf8").split(/\r?\n/);
+    return finish(lines.slice(0, asks).map((line) => line.trim()));
   }
 
   printHeader(ex);
   console.log(ex.snippet.trimEnd());
   console.log(pc.dim("─".repeat(60)));
   printTimer(ex);
+  if (asks === 1 && blanks > 1) console.log(pc.dim(`One answer fills all ${blanks} blanks.`));
 
   return withReadline(async (rl) => {
-    const answer = (await rl.question(pc.bold("\nFill the blank ____ (q to abandon) > "))).trim();
-    if (answer.toLowerCase() === "q") return makeOutcome(ex, 0, elapsed(), true);
-    const correct = gradeCloze(ex, answer);
-    if (correct) {
-      console.log(pc.green("\n✓ correct") + pc.dim(` in ${Math.round(elapsed())}s`));
-    } else {
-      console.log(pc.red("\n✗ nope.") + ` Accepted: ${ex.acceptedAnswers.join(" | ")}`);
+    const answers: string[] = [];
+    for (let i = 0; i < asks; i++) {
+      const label = asks > 1 ? `\nBlank ${i + 1}/${asks} (q to abandon) > ` : "\nFill the blank ____ (q to abandon) > ";
+      const answer = (await rl.question(pc.bold(label))).trim();
+      if (answer.toLowerCase() === "q") return makeOutcome(ex, 0, elapsed(), true);
+      answers.push(answer);
     }
-    return makeOutcome(ex, correct ? 1 : 0, elapsed());
+    return finish(answers);
   });
 }
 

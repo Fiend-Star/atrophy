@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CodeExercise, Exercise, HarnessExercise, RecallExercise } from "../bank/schema.js";
+import type { ClozeExercise, CodeExercise, Exercise, HarnessExercise, RecallExercise } from "../bank/schema.js";
 import { hasJdk } from "./javatool.js";
 import { previewExercise, runDrill, type DrillOutcome } from "./session.js";
 
@@ -302,6 +302,108 @@ describe("runDrill - recall", () => {
     }
     expect(outcome.passed).toBe(1);
     expect(lines.join("\n")).toContain("✓ correct");
+  });
+});
+
+const clozeEx: ClozeExercise = {
+  id: "api-py-950",
+  kind: "cloze",
+  axis: "api-memory",
+  language: "python",
+  tier: 1,
+  title: "sort by length",
+  prompt: "Fill the blank so the words sort shortest-to-longest.",
+  softTimeLimitSeconds: 60,
+  testTimeoutMs: 10_000,
+  snippet: "sorted(words, key=____)",
+  acceptedAnswers: ["len"],
+};
+
+/** Two blanks, two answers: the shape that earns partial credit. */
+const perBlankEx: ClozeExercise = {
+  ...clozeEx,
+  id: "api-java-950",
+  language: "java",
+  snippet: "list.____(x);\nlist.____(0);",
+  acceptedAnswers: [["add"], ["remove"]],
+};
+
+/** Two blanks, one answer for both - what api-py-003/004 ship today. */
+const sharedBlankEx: ClozeExercise = {
+  ...clozeEx,
+  id: "api-py-951",
+  snippet: 'import ____\n\nconfig = ____.load(f)',
+  acceptedAnswers: ["json"],
+};
+
+describe("runDrill - cloze", () => {
+  it("grades a single blank from a solution file, as it always has", async () => {
+    const { lines, restore } = captureLog();
+    let outcome: DrillOutcome;
+    try {
+      outcome = await runDrill(clozeEx, solutionFile("  len \n"));
+    } finally {
+      restore();
+    }
+    expect(outcome.passed).toBe(1);
+    expect(outcome.total).toBe(1);
+    expect(lines.join("\n")).toContain("✓ correct");
+  });
+
+  it("asks once per blank and gives partial credit", async () => {
+    const { outcome, output, prompts } = await driveDrill(perBlankEx, ["add", "nope"], "Blank ");
+    expect(outcome.passed).toBe(1);
+    expect(outcome.total).toBe(2);
+    expect(outcome.score).toBeGreaterThan(0);
+    expect(prompts).toContain("Blank 1/2");
+    expect(prompts).toContain("Blank 2/2");
+    expect(output).toContain("1/2 blanks correct");
+    // Only the blank they missed is spelled out - the one they got stays unspoiled.
+    expect(output).toContain("blank 2 accepted: remove");
+    expect(output).not.toContain("blank 1 accepted");
+  }, 30_000);
+
+  it("reads one answer per line in --solution mode", async () => {
+    const { lines, restore } = captureLog();
+    let outcome: DrillOutcome;
+    try {
+      outcome = await runDrill(perBlankEx, solutionFile("add\nremove\n"));
+    } finally {
+      restore();
+    }
+    expect(outcome.passed).toBe(2);
+    expect(outcome.total).toBe(2);
+    expect(lines.join("\n")).toContain("✓ correct");
+  });
+
+  it("asks once when one answer fills every blank, and credits them all", async () => {
+    const { outcome, output } = await driveDrill(sharedBlankEx, ["json"], "Fill the blank");
+    expect(outcome.passed).toBe(2);
+    expect(outcome.total).toBe(2);
+    expect(output).toContain("One answer fills all 2 blanks");
+    expect(output).toContain("✓ correct");
+  }, 30_000);
+
+  it("abandons on q mid-way through the blanks, scoring nothing", async () => {
+    const { outcome, output } = await driveDrill(perBlankEx, ["add", "q"], "Blank ");
+    expect(outcome.abandoned).toBe(true);
+    expect(outcome.passed).toBe(0);
+    expect(outcome.score).toBe(0);
+    expect(output).not.toContain("accepted: remove");
+  }, 30_000);
+});
+
+describe("previewExercise - cloze", () => {
+  it("counts the blanks without leaking an answer", () => {
+    const { lines, restore } = captureLog();
+    try {
+      previewExercise(sharedBlankEx);
+    } finally {
+      restore();
+    }
+    const output = lines.join("\n");
+    expect(output).toContain("(you would fill the 2 ____ blanks)");
+    expect(output).not.toContain("json\n");
   });
 });
 

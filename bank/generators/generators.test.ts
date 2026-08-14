@@ -2,10 +2,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { grade, gradeCloze, gradePrediction, solutionFileName } from "../../engine/grader.js";
+import { gradeCloze } from "../../engine/cloze.js";
+import { grade, gradePrediction, solutionFileName } from "../../engine/grader.js";
 import { JAVA_COMPILE_TIMEOUT_MS, hasJdk, javacCommand } from "../../engine/javatool.js";
 import { run } from "../../engine/runner.js";
-import { isCode, isHarness, type CodeExercise, type PredictExercise } from "../schema.js";
+import { isCode, isHarness, type ClozeExercise, type CodeExercise, type PredictExercise } from "../schema.js";
 import { allGenerators } from "./index.js";
 
 const SEEDS = ["a1b2c3", "000000", "ffffff"];
@@ -230,6 +231,11 @@ describe("generator contracts", () => {
       if (!ex || ex.kind !== "cloze") throw new Error(`no ${title} variant rendered`);
       return ex;
     };
+    /** Every fact here is one blank: the typed answer either fills it or it doesn't. */
+    const accepts = (ex: ClozeExercise, answer: string) => {
+      const { blanksCorrect, totalBlanks } = gradeCloze(ex, [answer]);
+      return blanksCorrect === totalBlanks;
+    };
 
     // Deque.push is specified as "equivalent to addFirst", so the alias is a right
     // answer to a prompt that asks for the behaviour - grading it wrong would cost the
@@ -238,25 +244,25 @@ describe("generator contracts", () => {
     // form") rather than the accepted set pretending it misbehaves; addLast is simply
     // the wrong end for the pop() below.
     const stack = byTitle(1, "Deque as a stack");
-    expect(gradeCloze(stack, "push")).toBe(true);
-    expect(gradeCloze(stack, "addFirst")).toBe(true);
-    expect(gradeCloze(stack, "offerFirst")).toBe(false);
-    expect(gradeCloze(stack, "addLast")).toBe(false);
+    expect(accepts(stack, "push")).toBe(true);
+    expect(accepts(stack, "addFirst")).toBe(true);
+    expect(accepts(stack, "offerFirst")).toBe(false);
+    expect(accepts(stack, "addLast")).toBe(false);
 
     // The lambda in the second argument is what pins computeIfAbsent: putIfAbsent and
     // getOrDefault take a plain V there (a lambda is not a List), and compute /
     // computeIfPresent want a two-arg BiFunction. None of them would compile.
     const lists = byTitle(1, "One list per key");
-    expect(gradeCloze(lists, "computeIfAbsent")).toBe(true);
-    expect(gradeCloze(lists, "putIfAbsent")).toBe(false);
-    expect(gradeCloze(lists, "getOrDefault")).toBe(false);
-    expect(gradeCloze(lists, "computeIfPresent")).toBe(false);
+    expect(accepts(lists, "computeIfAbsent")).toBe(true);
+    expect(accepts(lists, "putIfAbsent")).toBe(false);
+    expect(accepts(lists, "getOrDefault")).toBe(false);
+    expect(accepts(lists, "computeIfPresent")).toBe(false);
 
     // "sequentially" in the prompt is what excludes parallelSort, which reorders the
     // same way through a different execution contract.
     const rows = byTitle(2, "Sort rows by first column");
-    expect(gradeCloze(rows, "sort")).toBe(true);
-    expect(gradeCloze(rows, "parallelSort")).toBe(false);
+    expect(accepts(rows, "sort")).toBe(true);
+    expect(accepts(rows, "parallelSort")).toBe(false);
   });
 
   it("cloze generators always include the blank", () => {

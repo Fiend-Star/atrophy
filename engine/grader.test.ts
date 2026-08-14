@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type {
-  ClozeExercise,
   CodeExercise,
   CodeLikeExercise,
   HarnessExercise,
@@ -13,10 +12,8 @@ import type {
 } from "../bank/schema.js";
 import {
   grade,
-  gradeCloze,
   gradePrediction,
   gradeRecall,
-  normalizeClozeAnswer,
   normalizeOutput,
   normalizeRecallAnswer,
   solutionFileName,
@@ -600,33 +597,7 @@ describe("gradePrediction - java with no JDK", () => {
   });
 });
 
-const clozeEx: ClozeExercise = {
-  id: "api-py-901",
-  kind: "cloze",
-  axis: "api-memory",
-  language: "python",
-  tier: 1,
-  title: "sort by length",
-  prompt: "fill the blank",
-  softTimeLimitSeconds: 60,
-  testTimeoutMs: 10_000,
-  snippet: "sorted(words, key=____)",
-  acceptedAnswers: ["len"],
-};
-
-describe("gradeCloze", () => {
-  it("matches accepted answers, whitespace-insensitively", () => {
-    expect(gradeCloze(clozeEx, "len")).toBe(true);
-    expect(gradeCloze(clozeEx, "  len ")).toBe(true);
-    expect(gradeCloze(clozeEx, "size")).toBe(false);
-  });
-  it("stays case-sensitive (API names are)", () => {
-    expect(gradeCloze(clozeEx, "LEN")).toBe(false);
-  });
-  it("collapses internal whitespace runs", () => {
-    expect(normalizeClozeAnswer("lambda  w:  len(w)")).toBe("lambda w: len(w)");
-  });
-});
+// Cloze grading moved to engine/cloze.ts when blanks went multi; its tests went with it.
 
 describe("recall grading (pure, no JDK needed)", () => {
   const recallEx: RecallExercise = {

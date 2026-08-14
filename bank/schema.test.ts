@@ -96,6 +96,15 @@ describe("totalUnits", () => {
     const cloze = { id: "api-py-001", kind: "cloze", axis: "api-memory", language: "python", tier: 1, title: "t", prompt: "p", softTimeLimitSeconds: 60, snippet: "____", acceptedAnswers: ["len"] };
     expect(totalUnits(parseExercise(JSON.stringify(cloze)))).toBe(1);
   });
+
+  it("counts a cloze's blanks under either accepted-answer shape", () => {
+    const perBlank = { id: "api-py-002", kind: "cloze", axis: "api-memory", language: "python", tier: 1, title: "t", prompt: "p", softTimeLimitSeconds: 60, snippet: "a.____(x); b.____(y)", acceptedAnswers: [["add"], ["remove"]] };
+    expect(totalUnits(parseExercise(JSON.stringify(perBlank)))).toBe(2);
+    // The flat shape means "the same answer fills every blank" (api-py-003 ships it):
+    // still one graded unit per blank, but a single typed answer earns them all.
+    const shared = { ...perBlank, id: "api-py-003", acceptedAnswers: ["add"] };
+    expect(totalUnits(parseExercise(JSON.stringify(shared)))).toBe(2);
+  });
 });
 
 describe("recall kind", () => {
@@ -207,8 +216,11 @@ describe("sql write shape", () => {
     expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "python", starterCode: "def f(): pass", tests: [{ args: [], expected: 1 }] })).toThrow(); // functionName still required off-sql
   });
   it("rejects sql on fix and predict-output", () => {
-    expect(() => exerciseSchema.parse({ ...base, kind: "fix", language: "sql", starterCode: "-- q", cases: sqlCases })).toThrow();
-    expect(() => exerciseSchema.parse({ ...base, kind: "predict-output", language: "sql", snippet: "SELECT 1;" })).toThrow();
+    // Pinned to the rule's own message: the fix fixture is invalid four ways over
+    // (sql language, missing tests, missing functionName, sql-only cases), so a bare
+    // .toThrow() would stay green with the sql-on-fix rule deleted.
+    expect(() => exerciseSchema.parse({ ...base, kind: "fix", language: "sql", starterCode: "-- q", cases: sqlCases })).toThrow(/sql is only supported on write exercises/);
+    expect(() => exerciseSchema.parse({ ...base, kind: "predict-output", language: "sql", snippet: "SELECT 1;" })).toThrow(/sql is only supported on write exercises/);
   });
   it("exports JVM_KINDS as the four java-graded kinds", () => {
     expect([...JVM_KINDS]).toEqual(["write", "fix", "write-harness", "fix-harness"]);

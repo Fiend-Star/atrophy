@@ -51,6 +51,15 @@ export function canonicalRows(rows: readonly Record<string, unknown>[]): string 
   return JSON.stringify(rows.map(canonicalRow).sort());
 }
 
+/**
+ * How many blanks a cloze snippet has: `____` runs, counted non-overlapping. It lives
+ * here because the parse rule below needs it; `engine/cloze.ts` re-exports it as the
+ * engine-side door so there is exactly one definition.
+ */
+export function countBlanks(snippet: string): number {
+  return snippet.match(/____/g)?.length ?? 0;
+}
+
 const baseFields = {
   // static: sr-py-001 · generated: sr-py-cond-1a2b3c (family + hex seed)
   id: z.string().regex(/^[a-z][a-z0-9]*(-[a-z0-9]+)+$/, "id must look like sr-py-001 or family-abc123"),
@@ -120,13 +129,22 @@ const exerciseUnion = z.discriminatedUnion("kind", [
     language: z.enum(LANGUAGES),
     snippet: z.string().min(1),
   }),
-  /** API/stdlib memory: fill the ____ blank in the snippet. */
+  /**
+   * API/stdlib memory: fill the snippet's ____ blanks. Two answer shapes, and they
+   * differ in how many answers the user types, not in how many blanks are graded:
+   * one set per blank (`string[][]`, length checked against the snippet below), or a
+   * flat set that fills every blank - the single-blank shape, unchanged, and what a
+   * multi-blank static means today ("the same stdlib module goes in both blanks").
+   */
   z.object({
     kind: z.literal("cloze"),
     ...baseFields,
     language: z.enum(LANGUAGES),
     snippet: z.string().min(1),
-    acceptedAnswers: z.array(z.string().min(1)).min(1),
+    acceptedAnswers: z.union([
+      z.array(z.string().min(1)).min(1),
+      z.array(z.array(z.string().min(1)).min(1)).min(1),
+    ]),
   }),
   /** Decomposition: outline an approach, self-scored against a rubric (LLM-judged in v2). */
   z.object({
@@ -150,7 +168,8 @@ const exerciseUnion = z.discriminatedUnion("kind", [
  * Cross-field rules the discriminated union cannot state on its own. Only a sql write
  * carries `cases`; every other write/fix carries `tests` + `functionName`. sql exists
  * as a language for that one kind: there is nothing to "fix" in a query the user never
- * wrote, and a query has no stdout to predict.
+ * wrote, and a query has no stdout to predict. A cloze's per-blank answers are the
+ * other such rule: their count only means something against the snippet.
  */
 const refinedUnion = exerciseUnion.superRefine((ex, ctx) => {
   const reject = (path: string, message: string) => ctx.addIssue({ code: "custom", path: [path], message });
@@ -176,6 +195,19 @@ const refinedUnion = exerciseUnion.superRefine((ex, ctx) => {
     return;
   }
   if (ex.kind === "predict-output" && ex.language === "sql") reject("language", sqlIsWriteOnly);
+  if (ex.kind === "cloze") {
+    const blanks = countBlanks(ex.snippet);
+    // The union has already rejected a mixed array, so the first entry decides the shape.
+    const perBlank = Array.isArray(ex.acceptedAnswers[0]);
+    if (blanks === 0) reject("snippet", "cloze snippet must contain at least one ____ blank");
+    // The flat shape needs no count check: one set fills however many blanks there are.
+    else if (perBlank && ex.acceptedAnswers.length !== blanks) {
+      reject(
+        "acceptedAnswers",
+        `per-blank acceptedAnswers needs one set per ____ blank (sets: ${ex.acceptedAnswers.length}, blanks: ${blanks})`,
+      );
+    }
+  }
 });
 
 /** What the object shapes alone say: write/fix with every graded field optional. */
@@ -237,8 +269,10 @@ export function totalUnits(ex: Exercise): number {
     case "fix-harness":
       return ex.totalChecks;
     case "predict-output":
-    case "cloze":
       return 1;
+    // Every blank is a graded unit, so a multi-blank cloze scores as a fraction.
+    case "cloze":
+      return countBlanks(ex.snippet);
     case "outline":
       return ex.rubric.length;
     case "recall":
