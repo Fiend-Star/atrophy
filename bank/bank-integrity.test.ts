@@ -98,6 +98,14 @@ const JVM_KINDS = new Set(["write", "fix", "write-harness", "fix-harness", "pred
 describe("java timeout floors", () => {
   const javaJvm = bank.filter((ex) => ex.language === "java" && JVM_KINDS.has(ex.kind));
 
+  it("the built-in bank ships JVM-graded java exercises at all", () => {
+    // Every java check in this file - the floors here and the whole JDK-gated describe
+    // below - iterates this set, so losing the shipped java content would turn all of
+    // them green by iterating nothing. A pack pointed at by ATROPHY_BANK may legitimately
+    // ship no java, so only the built-in bank is held to this.
+    if (validatingBuiltInBank) expect(javaJvm.length).toBeGreaterThan(0);
+  });
+
   it("every JVM-spawning java exercise allows at least 20s", () => {
     const bad = javaJvm.filter((ex) => ex.testTimeoutMs < 20_000);
     expect(bad.map((ex) => `${ex.id}: ${ex.testTimeoutMs}`)).toEqual([]);
