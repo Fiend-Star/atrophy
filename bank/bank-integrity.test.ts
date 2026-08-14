@@ -127,8 +127,8 @@ const javaPredicts = bank.filter(
   (e): e is PredictExercise => e.kind === "predict-output" && e.language === "java",
 );
 
-// Java content is validated only where a toolchain exists; the loops are armed and
-// empty until Java exercises ship, so new content lands into an existing gate.
+// Java content is validated only where a toolchain exists; the presence check above
+// guarantees the built-in bank keeps these loops non-empty.
 // Generated java families ship no JSON and so never reach this bank, but they reach the
 // same grader: their copy of these gates lives beside the other generator contracts,
 // in bank/generators/generators.test.ts ("generator contracts - java").
