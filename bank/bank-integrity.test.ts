@@ -157,14 +157,21 @@ function fixtureSnapshot(fixture: string): string {
 
 /**
  * sql needs no toolchain gate the way java does - better-sqlite3 is a dependency of the
- * CLI itself, so any machine that can run atrophy can validate sql content. These gates
- * are vacuous on the built-in bank until the first sql statics land (spec §3.5 adds the
- * `sqlWrites > 0` vacuity arm in that same commit, deliberately not before: a bank with
- * no sql yet would fail such an arm on the truth). Every pack validated through
- * ATROPHY_BANK is held to them from today.
+ * CLI itself, so any machine that can run atrophy can validate sql content, and every
+ * pack validated through ATROPHY_BANK is held to these gates as well. What keeps them
+ * from passing on an empty loop is the presence arm below (spec §3.5).
  */
 describe("bank integrity - sql", () => {
   const sqlWrites = bank.filter(isSqlWrite);
+
+  it("the built-in bank ships sql write content", () => {
+    // spec §3.5's third vacuity arm, beside the two java ones above. Every gate in this
+    // describe iterates sqlWrites, so a bank that lost its sql would turn all of them
+    // green by iterating nothing. A pack pointed at by ATROPHY_BANK may legitimately ship
+    // no sql at all, so only the built-in bank is held to this.
+    if (!validatingBuiltInBank) return;
+    expect(sqlWrites.length, "built-in bank ships no sql write content").toBeGreaterThan(0);
+  });
 
   it("every fixture applies cleanly and builds the same database twice", () => {
     for (const ex of sqlWrites) {
@@ -196,7 +203,7 @@ describe("bank integrity - sql", () => {
     }
   });
 
-  it("every expected value is a JSON scalar, and integers stay exact", () => {
+  it("every expected value is a value SQLite can return, and integers stay exact", () => {
     for (const ex of sqlWrites) {
       for (const [i, c] of ex.cases.entries()) {
         for (const row of c.expectedRows) {
@@ -205,10 +212,17 @@ describe("bank integrity - sql", () => {
             // canonicalRows sorts top-level keys only, so a nested object's own key order
             // would decide equality - and no SQLite column returns an object or an array
             // anyway, so such a value is unmatchable by any query.
-            const scalar = value === null || ["string", "number", "boolean"].includes(typeof value);
-            expect(scalar, `${where}: expected values must be JSON scalars, got ${JSON.stringify(value)}`).toBe(
-              true,
-            );
+            // A JSON boolean is rejected for the same reason: better-sqlite3 hands back
+            // SQLite's 1/0 integers and never a JS boolean, so `true` in an expectedRow is
+            // an answer no query can give. On an unordered drill the cheese gate below
+            // catches it (the source case stops reproducing itself), but that arm is
+            // skipped when `ordered` is set - so for an ordered drill this is the only
+            // gate standing between a boolean and an unwinnable exercise.
+            const scalar = value === null || typeof value === "string" || typeof value === "number";
+            expect(
+              scalar,
+              `${where}: expected values must be a string, a number or null - SQLite returns nothing else, got ${JSON.stringify(value)}`,
+            ).toBe(true);
             if (typeof value !== "number") continue;
             expect(Number.isFinite(value), `${where}: ${String(value)} is not a finite number`).toBe(true);
             // Same rule as java's `tests`: the exercise JSON goes through Node's JSON.parse
@@ -244,6 +258,10 @@ describe("bank integrity - sql", () => {
       // fixture (harnessError) or a cheese SQLite refuses to parse both score 0.
       expect(r.harnessError, `${ex.id}: ${r.harnessError}`).toBeUndefined();
       for (const f of r.failures) {
+        // A case expecting 501+ rows builds a cheese past SQLITE_MAX_COMPOUND_SELECT (500
+        // UNION ALL terms), which SQLite will not parse - this arm then reds carrying the
+        // parse error as its message. That red is the design working, not a gate bug: an
+        // uncheesable exercise is one this net cannot cover, so it wants smaller cases.
         expect(f.error, `${ex.id}: the cheese did not run as a query: ${f.error}`).toContain("wrong rows");
       }
       if (!ex.ordered) {
@@ -288,8 +306,8 @@ describe("java timeout floors", () => {
     // compilation and planted bugs, predict-output gates snippet determinism, and a
     // bank keeping only one of them would leave the other's loop silently vacuous.
     // A pack pointed at by ATROPHY_BANK may legitimately ship no java, so only the
-    // built-in bank is held to this. (A sql arm joins these when the first built-in
-    // sql statics land - never before, or the gate fails on the truth.)
+    // built-in bank is held to this. (The third arm of the same guard, sql, lives with
+    // the gates it protects: "the built-in bank ships sql write content" above.)
     if (!validatingBuiltInBank) return;
     expect(javaCode.length, "built-in bank ships no java write/fix/harness content").toBeGreaterThan(0);
     expect(javaPredicts.length, "built-in bank ships no java predict-output content").toBeGreaterThan(0);

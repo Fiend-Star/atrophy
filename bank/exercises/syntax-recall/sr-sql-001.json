@@ -1,0 +1,31 @@
+{
+  "id": "sr-sql-001",
+  "kind": "write",
+  "axis": "syntax-recall",
+  "language": "sql",
+  "tier": 1,
+  "title": "Customers with repeat orders",
+  "prompt": "SQLite. Submit exactly one SELECT statement (a second, semicolon-separated statement is rejected).\n\nTable:\n  orders(id INTEGER PRIMARY KEY, customer TEXT NOT NULL, amount INTEGER NOT NULL)\n\nReturn one row per customer who placed at least 2 orders: the customer, and how many\norders they placed. The column names are part of the answer - name them exactly\ncustomer and orders_count. Row order does not matter.\n\nExample - for the rows\n  (1, 'zoe', 10), (2, 'zoe', 4), (3, 'kai', 7)\nthe result is the single row  zoe | 2.",
+  "starterCode": "-- one SELECT; columns: customer, orders_count\n",
+  "softTimeLimitSeconds": 300,
+  "cases": [
+    {
+      "fixture": "CREATE TABLE orders (\n  id INTEGER PRIMARY KEY,\n  customer TEXT NOT NULL,\n  amount INTEGER NOT NULL\n);\nINSERT INTO orders (id, customer, amount) VALUES\n  (1, 'ana', 40),\n  (2, 'bo', 22),\n  (3, 'ana', 15),\n  (4, 'cy', 60),\n  (5, 'cy', 10),\n  (6, 'cy', 5);\n",
+      "expectedRows": [
+        { "customer": "ana", "orders_count": 2 },
+        { "customer": "cy", "orders_count": 3 }
+      ]
+    },
+    {
+      "fixture": "CREATE TABLE orders (\n  id INTEGER PRIMARY KEY,\n  customer TEXT NOT NULL,\n  amount INTEGER NOT NULL\n);\nINSERT INTO orders (id, customer, amount) VALUES\n  (1, 'ana', 12),\n  (2, 'bo', 30),\n  (3, 'dee', 18),\n  (4, 'bo', 7),\n  (5, 'dee', 9),\n  (6, 'dee', 25),\n  (7, 'dee', 3);\n",
+      "expectedRows": [
+        { "customer": "bo", "orders_count": 2 },
+        { "customer": "dee", "orders_count": 4 }
+      ]
+    },
+    {
+      "fixture": "CREATE TABLE orders (\n  id INTEGER PRIMARY KEY,\n  customer TEXT NOT NULL,\n  amount INTEGER NOT NULL\n);\nINSERT INTO orders (id, customer, amount) VALUES\n  (1, 'ana', 40),\n  (2, 'bo', 22),\n  (3, 'cy', 60);\n",
+      "expectedRows": []
+    }
+  ]
+}
