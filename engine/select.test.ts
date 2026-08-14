@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ExerciseGenerator } from "../bank/generators/types.js";
-import type { Exercise } from "../bank/schema.js";
-import { availableAxes, familyOf, hiddenByToolchain, resolveExercise, selectExercise, targetTier } from "./select.js";
+import type { Exercise, Language } from "../bank/schema.js";
+import { mulberry32 } from "./rng.js";
+import { availableAxes, familyOf, hiddenByToolchain, resolveExercise, selectExercise, targetTier, type SelectOptions } from "./select.js";
 
 /** Toolchain fakes: every test says out loud which graders the host can run. */
 const JDK = { jdk: true };
@@ -311,6 +312,141 @@ describe("selectExercise - toolchain filtering", () => {
     expect(draw("java")?.id).toBe("api-java-recall-001");
     expect(hiddenByToolchain({ statics: [javaRecall], axis: "api-memory", language: "java", toolchains: NO_JDK })).toBe(0);
     expect(draw("python")).toBeUndefined();
+  });
+});
+
+describe("selectExercise - language mix soft-cap", () => {
+  // One axis, one tier, one candidate per language: language weight is the only
+  // thing separating draw shares in a sweep.
+  const javaEx = ex("sr-java-101", 1, "java");
+  const pyEx = ex("sr-py-101", 1);
+  const anyEx: Exercise = { ...outlineEx, id: "sr-any-101", axis: "syntax-recall", tier: 1 };
+
+  /** Seeded sweep: how many of n draws landed on each language. */
+  function langShares(n: number, opts: Omit<SelectOptions, "random">, seed = 42): Record<string, number> {
+    const rng = mulberry32(seed);
+    const counts: Record<string, number> = {};
+    for (let i = 0; i < n; i++) {
+      const lang = selectExercise({ ...opts, random: rng })!.language;
+      counts[lang] = (counts[lang] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  it("soft-caps a language holding at least three of the six-session window", () => {
+    const pool = { statics: [javaEx, pyEx, anyEx], axis: "syntax-recall" as const, rating: 1150, toolchains: JDK };
+    const capped = langShares(400, {
+      ...pool,
+      recentLanguages: ["java", "java", "java", "python", "javascript", "python"],
+    });
+    // java at x0.25 against python's 1: roughly a quarter of python's share, not parity
+    expect(capped["java"] ?? 0).toBeLessThan((capped["python"] ?? 0) / 2);
+    // no window, no policy: the three candidates split the sweep about evenly
+    const free = langShares(400, pool);
+    for (const lang of ["java", "python", "any"]) {
+      expect(free[lang] ?? 0).toBeGreaterThan(100);
+      expect(free[lang] ?? 0).toBeLessThan(170);
+    }
+  });
+
+  it("explicit language bypasses the cap", () => {
+    // --lang java is the user steering: an all-java history penalizes nothing.
+    const shares = langShares(400, {
+      statics: [javaEx, anyEx],
+      axis: "syntax-recall",
+      rating: 1150,
+      toolchains: JDK,
+      language: "java",
+      recentLanguages: ["java", "java", "java", "java", "java", "java"],
+    });
+    expect(shares["java"] ?? 0).toBeGreaterThan(150);
+    expect(shares["any"] ?? 0).toBeGreaterThan(150);
+  });
+
+  it("an all-dominant pool still serves the dominant language", () => {
+    // Soft cap, not a filter: weights renormalize, so all-java still drills java.
+    for (const r of [0, 0.5, 0.999999]) {
+      const pick = selectExercise({
+        statics: [javaEx, ex("sr-java-102", 1, "java")],
+        generators: [fakeGen("sr-java-cond", [1], "java")],
+        axis: "syntax-recall",
+        rating: 1150,
+        toolchains: JDK,
+        random: () => r,
+        recentLanguages: ["java", "java", "java", "java", "java", "java"],
+      });
+      expect(pick?.language).toBe("java");
+    }
+  });
+
+  it("any-language candidates are never penalized", () => {
+    // "any" holds half the window here: it must neither count toward dominance
+    // nor pay java's penalty - so it takes java's lost share, about four to one.
+    const shares = langShares(400, {
+      statics: [javaEx, anyEx],
+      axis: "syntax-recall",
+      rating: 1150,
+      toolchains: JDK,
+      recentLanguages: ["java", "any", "java", "any", "java", "any"],
+    });
+    expect(shares["any"] ?? 0).toBeGreaterThan(3 * (shares["java"] ?? 0));
+  });
+
+  it("counts only the first six entries, and only at three or more", () => {
+    const pool = { statics: [javaEx, pyEx], axis: "syntax-recall" as const, rating: 1150, toolchains: JDK };
+    // java's three appearances sit beyond the six-entry window: python's three
+    // inside it cap python, java goes free.
+    const windowed = langShares(400, {
+      ...pool,
+      recentLanguages: ["python", "javascript", "python", "javascript", "python", "javascript", "java", "java", "java"],
+    });
+    expect((windowed["python"] ?? 0) * 2).toBeLessThan(windowed["java"] ?? 0);
+    // two apiece is below the dominance threshold: nobody is capped
+    const below = langShares(400, {
+      ...pool,
+      recentLanguages: ["java", "java", "python", "python", "javascript", "javascript"],
+    });
+    expect(below["java"] ?? 0).toBeGreaterThan(150);
+    expect(below["python"] ?? 0).toBeGreaterThan(150);
+  });
+
+  it("absent recentLanguages preserves existing behavior draw-for-draw", () => {
+    const draw = (recentLanguages?: (Language | "any")[]) => {
+      const rng = mulberry32(7);
+      const ids: string[] = [];
+      for (let i = 0; i < 12; i++) {
+        ids.push(
+          selectExercise({
+            statics: [pyEx, javaEx, anyEx],
+            generators: [fakeGen("sr-py-cond", [1]), fakeGen("sr-java-cond", [1], "java")],
+            axis: "syntax-recall",
+            rating: 1150,
+            toolchains: JDK,
+            random: rng,
+            ...(recentLanguages ? { recentLanguages } : {}),
+          })!.id,
+        );
+      }
+      return ids;
+    };
+    // Pinned from the pre-soft-cap implementation (seed 7): with no window given,
+    // selection must stay bit-for-bit what it was, rng consumption included.
+    expect(draw()).toEqual([
+      "sr-py-101",
+      "sr-py-101",
+      "sr-java-cond-b2f38a",
+      "sr-py-cond-67d044",
+      "sr-py-cond-3d6bbc",
+      "sr-py-cond-bad59e",
+      "sr-java-101",
+      "sr-java-101",
+      "sr-java-cond-84b606",
+      "sr-java-101",
+      "sr-any-101",
+      "sr-any-101",
+    ]);
+    // a window that never reaches dominance is the same as no window at all
+    expect(draw(["java", "python", "java", "python"])).toEqual(draw());
   });
 });
 

@@ -11,7 +11,7 @@ import { autoSync, isRegistered, maybePrintPublishHint, publishCommand } from ".
 import { configPath, packDirs } from "./config.js";
 import { detectAssistants } from "../engine/guard.js";
 import { javacCommand, missingJdkHint } from "../engine/javatool.js";
-import { availableAxes, hiddenByToolchain, resolveExercise, selectExercise } from "../engine/select.js";
+import { availableAxes, hiddenByToolchain, resolveExercise, selectExercise, type SelectOptions } from "../engine/select.js";
 import { previewExercise, runDrill } from "../engine/session.js";
 import { computeStreak } from "../engine/streak.js";
 import { detectRegression, detectRegressions, type Regression } from "../engine/regression.js";
@@ -97,7 +97,11 @@ function dueAxis(store: Store, bank: Exercise[], language?: Language): Axis {
   return best;
 }
 
-async function drillOnce(store: Store, flags: DrillFlags): Promise<boolean> {
+async function drillOnce(
+  store: Store,
+  flags: DrillFlags,
+  opts: { languageMix?: boolean } = {},
+): Promise<boolean> {
   const bank = loadBank(bankDirs());
   const language = flags.lang ? parseLang(flags.lang) : undefined;
   const mode = flags.aiOn ? "ai-on" : "ai-off";
@@ -128,7 +132,7 @@ async function drillOnce(store: Store, flags: DrillFlags): Promise<boolean> {
   } else {
     const axis = flags.axis ? parseAxis(flags.axis) : dueAxis(store, bank, language);
     const recent = store.recentSessions(axis, 6).map((s) => s.exercise_id);
-    const pick = {
+    const pick: SelectOptions = {
       statics: bank,
       generators: allGenerators,
       axis,
@@ -136,6 +140,12 @@ async function drillOnce(store: Store, flags: DrillFlags): Promise<boolean> {
       recentIds: recent,
       language,
     };
+    // Language mix soft-cap (spec E1): only when the user is not steering with
+    // --lang. Baseline opts out too - it forces per-axis coverage, and its own
+    // first drills would otherwise skew the languages of its later ones.
+    if (opts.languageMix !== false && language === undefined) {
+      pick.recentLanguages = store.recentSessionLanguages(6);
+    }
     // Selection hides java drills a JVM would have to grade when there is no JDK. For
     // the user who asked for java that must never be silent: it shrinks the pool they
     // are measured on, and when it empties the pool entirely "no exercises in the bank"
@@ -338,7 +348,7 @@ async function baseline(store: Store, flags: DrillFlags): Promise<void> {
       ` - one unaided drill per axis (${axesWithExercises.length} available today).`,
   );
   for (const axis of axesWithExercises) {
-    const ok = await drillOnce(store, { ...flags, axis });
+    const ok = await drillOnce(store, { ...flags, axis }, { languageMix: false });
     if (!ok) break;
   }
   stats(store);

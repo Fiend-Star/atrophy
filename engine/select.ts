@@ -58,6 +58,35 @@ export function resolveExercise(
 /** A generator family offers many variants, so it outweighs one static file. */
 const GENERATOR_WEIGHT = 2;
 
+/**
+ * Language mix soft-cap (spec E1): with no --lang, nothing else stops one concrete
+ * language from dominating a stretch of draws (a pack can skew the pool hard). A
+ * language holding at least LANGUAGE_CAP_THRESHOLD of the caller's last
+ * LANGUAGE_CAP_WINDOW sessions has its candidates' weight multiplied by
+ * LANGUAGE_CAP_MULTIPLIER. Soft only: weights renormalize inside the pick, so an
+ * all-dominant pool still serves - the pool is never filtered.
+ */
+const LANGUAGE_CAP_MULTIPLIER = 0.25;
+const LANGUAGE_CAP_WINDOW = 6;
+const LANGUAGE_CAP_THRESHOLD = 3;
+
+/**
+ * Concrete languages dominant in the recent window. "any" sessions occupy window
+ * slots but are language-agnostic evidence: they never count toward dominance
+ * (and "any" candidates never pay the penalty).
+ */
+function cappedLanguages(recentLanguages: readonly (Language | "any")[]): Set<Language> {
+  const counts = new Map<Language, number>();
+  const capped = new Set<Language>();
+  for (const lang of recentLanguages.slice(0, LANGUAGE_CAP_WINDOW)) {
+    if (lang === "any") continue;
+    const n = (counts.get(lang) ?? 0) + 1;
+    counts.set(lang, n);
+    if (n >= LANGUAGE_CAP_THRESHOLD) capped.add(lang);
+  }
+  return capped;
+}
+
 /** Which graders this host can actually run. Injected so tests never probe. */
 export interface Toolchains {
   jdk: boolean;
@@ -103,6 +132,13 @@ export interface SelectOptions {
   /** Recently attempted exercise ids; their families are avoided when possible. */
   recentIds?: string[];
   language?: Language;
+  /**
+   * Languages of the caller's most recent recorded sessions, most-recent-first
+   * (the CLI passes the store's last six). Feeds the mix soft-cap; absent means
+   * no policy. Ignored entirely when `language` is set - an explicit --lang is
+   * the user steering, and selection never fights it.
+   */
+  recentLanguages?: (Language | "any")[];
   random?: Rng;
   /** Defaults to this host's real toolchains; tests pass a fake instead. */
   toolchains?: Toolchains;
@@ -121,11 +157,15 @@ export function selectExercise(opts: SelectOptions): Exercise | undefined {
     rating,
     recentIds = [],
     language,
+    recentLanguages,
     random = Math.random,
     toolchains = hostToolchains(),
   } = opts;
   const recentFamilies = new Set(recentIds.map(familyOf));
   const offer = (c: Candidate) => offerable(c, language, toolchains);
+  const capped =
+    language === undefined && recentLanguages ? cappedLanguages(recentLanguages) : new Set<Language>();
+  const langWeight = (l: Language | "any") => (l !== "any" && capped.has(l) ? LANGUAGE_CAP_MULTIPLIER : 1);
 
   const target = targetTier(rating);
   const tierOrder = [1, 2, 3].sort(
@@ -145,17 +185,23 @@ export function selectExercise(opts: SelectOptions): Exercise | undefined {
     const useStatics = anyFresh ? freshStatics : staticPool;
     const useGens = anyFresh ? freshGens : genPool;
 
-    const total = useStatics.length + useGens.length * GENERATOR_WEIGHT;
+    // Language multipliers compose with the generator weight and renormalize via
+    // `total`, so a capped-language-only pool still serves (weights never hit 0).
+    const staticWeights = useStatics.map((e) => langWeight(e.language));
+    const genWeights = useGens.map((g) => GENERATOR_WEIGHT * langWeight(g.language));
+    let total = 0;
+    for (const w of staticWeights) total += w;
+    for (const w of genWeights) total += w;
     if (total === 0) continue;
 
     let roll = random() * total;
-    for (const ex of useStatics) {
-      roll -= 1;
-      if (roll < 0) return ex;
+    for (let i = 0; i < useStatics.length; i++) {
+      roll -= staticWeights[i]!;
+      if (roll < 0) return useStatics[i];
     }
-    for (const g of useGens) {
-      roll -= GENERATOR_WEIGHT;
-      if (roll < 0) return g.generate(hexSeed(random), tier);
+    for (let i = 0; i < useGens.length; i++) {
+      roll -= genWeights[i]!;
+      if (roll < 0) return useGens[i]!.generate(hexSeed(random), tier);
     }
     // floating-point edge: fall through to the last candidate
     if (useGens.length > 0) return useGens[useGens.length - 1]!.generate(hexSeed(random), tier);
