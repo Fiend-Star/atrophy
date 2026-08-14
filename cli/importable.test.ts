@@ -80,6 +80,9 @@ describe("cli/index.ts is import-safe", () => {
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
+      // ESM caches modules: without this, a test that imported first would make
+      // every assertion below pass vacuously (nothing re-executes on re-import).
+      vi.resetModules();
       const mod = await importCli();
       expect(exit).not.toHaveBeenCalled();
       expect(stdout).not.toHaveBeenCalled();
