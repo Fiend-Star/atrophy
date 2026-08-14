@@ -1,0 +1,12 @@
+{
+  "id": "api-any-001",
+  "kind": "recall",
+  "axis": "api-memory",
+  "language": "any",
+  "tier": 2,
+  "title": "Binary search on a million elements",
+  "prompt": "A sorted array holds 1,000,000 elements. Binary search compares the target with the middle element and throws away half of what is left, over and over.\n\nIn the worst case, how many of those comparisons does it make before it can answer found-or-absent?\n\nType the number only.",
+  "softTimeLimitSeconds": 180,
+  "acceptedAnswers": ["20"],
+  "reveal": "20 - the count is ceil(log2(n + 1)). Halve 1,000,000 nineteen times and about 2 candidates are still standing (10^6 / 2^19 = 1.9); the twentieth halving is what leaves one.\n\nThe number worth carrying is not 20 but the shape: every doubling of n costs exactly one more comparison.\n\n  n              worst-case comparisons\n  1,000          10\n  1,000,000      20\n  1,000,000,000  30\n\nThat is why sorting once to search many times pays off, and why an index lookup stays cheap as a table grows: a billion-row B-tree is a handful of probes, not a billion."
+}

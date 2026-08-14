@@ -1,0 +1,12 @@
+{
+  "id": "api-any-003",
+  "kind": "recall",
+  "axis": "api-memory",
+  "language": "any",
+  "tier": 3,
+  "title": "The ceiling on parallel speedup",
+  "prompt": "A job takes 100 seconds on one core. 20% of that time is a strictly serial section that cannot be split at all; the other 80% parallelizes perfectly, with no coordination cost.\n\nYou throw an unlimited number of cores at it. What is the best speedup you can reach over the single-core run?\n\nType the multiplier as a bare number - e.g. 3 or 3.5 (a fraction such as 8/3 is read the same way).",
+  "softTimeLimitSeconds": 240,
+  "acceptedAnswers": ["5", "5x"],
+  "reveal": "5x, and not one percent more. That is Amdahl's law: with a serial fraction s, speedup <= 1/s however many cores you add, and here 1/0.2 = 5. The 80 parallel seconds shrink toward zero; the 20 serial seconds never move, so 100s -> 20s is the floor.\n\n  serial fraction   ceiling\n  50%               2x\n  20%               5x\n  10%               10x\n  5%                20x\n  1%                100x\n\nTwo working consequences. First, measure the serial fraction before buying cores: at 10% serial, going from 8 cores to 800 takes you from about 4.7x to about 9.9x - a hundredfold in hardware for a bit over twice the speed. Second, the serial fraction is everything that does not parallelize, not just the loop you had in mind: process startup, I/O you never overlapped, a lock every worker queues on, and the final reduce all land in s.\n\nGustafson's law is the counterweight: spend the extra cores on a BIGGER problem instead of the same one faster, and the serial part stays fixed while the parallel part grows - so the ceiling stops binding. That is why scaling out works for throughput far more often than it works for latency."
+}

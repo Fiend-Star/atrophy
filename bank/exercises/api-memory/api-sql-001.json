@@ -1,0 +1,12 @@
+{
+  "id": "api-sql-001",
+  "kind": "recall",
+  "axis": "api-memory",
+  "language": "sql",
+  "tier": 1,
+  "title": "COUNT and the NULLs",
+  "prompt": "SQL.\n\n    CREATE TABLE t (id INTEGER, score INTEGER);\n    INSERT INTO t (id, score) VALUES\n      (1, 10), (2, NULL), (3, 30), (4, NULL), (5, 10);\n\n    SELECT COUNT(score) FROM t;\n\nWhat single number does that query return?\n\nType the number only.",
+  "softTimeLimitSeconds": 120,
+  "acceptedAnswers": ["3"],
+  "reveal": "3. COUNT(expr) counts the rows where expr IS NOT NULL, so the two NULL scores are skipped - and duplicates still count, so the two 10s are two.\n\nThree counts on the same table, all different:\n\n    COUNT(*)                5   -- rows, NULLs and all\n    COUNT(score)            3   -- non-NULL values\n    COUNT(DISTINCT score)   2   -- distinct non-NULL values: 10 and 30\n\nEvery aggregate skips NULLs the same way, which is why AVG(score) here is (10 + 30 + 10) / 3, not the same 50 divided by 5 rows. And over a group with no non-NULL values every aggregate returns NULL - except COUNT, which returns 0. That is the difference behind COALESCE(SUM(x), 0): SUM needs it, COUNT never does."
+}

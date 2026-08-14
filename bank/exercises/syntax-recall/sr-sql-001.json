@@ -26,6 +26,13 @@
     {
       "fixture": "CREATE TABLE orders (\n  id INTEGER PRIMARY KEY,\n  customer TEXT NOT NULL,\n  amount INTEGER NOT NULL\n);\nINSERT INTO orders (id, customer, amount) VALUES\n  (1, 'ana', 40),\n  (2, 'bo', 22),\n  (3, 'cy', 60);\n",
       "expectedRows": []
+    },
+    {
+      "fixture": "CREATE TABLE orders (\n  id INTEGER PRIMARY KEY,\n  customer TEXT NOT NULL,\n  amount INTEGER NOT NULL\n);\nINSERT INTO orders (id, customer, amount) VALUES\n  (1, 'eve', 25),\n  (2, 'eve', 25),\n  (3, 'fin', 8),\n  (4, 'gil', 14),\n  (5, 'gil', 14),\n  (6, 'gil', 14);\n",
+      "expectedRows": [
+        { "customer": "eve", "orders_count": 2 },
+        { "customer": "gil", "orders_count": 3 }
+      ]
     }
   ]
 }
