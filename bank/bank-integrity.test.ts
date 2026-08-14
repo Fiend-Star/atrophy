@@ -97,15 +97,30 @@ describe("bank integrity", () => {
  */
 const JVM_SPAWNING_KINDS = new Set<string>([...JVM_KINDS, "predict-output"]);
 
+const javaGradedKinds = new Set<string>(JVM_KINDS);
+const javaCode = bank.filter(
+  (e): e is CodeLikeExercise => javaGradedKinds.has(e.kind) && e.language === "java",
+);
+const javaPredicts = bank.filter(
+  (e): e is PredictExercise => e.kind === "predict-output" && e.language === "java",
+);
+
 describe("java timeout floors", () => {
   const javaJvm = bank.filter((ex) => ex.language === "java" && JVM_SPAWNING_KINDS.has(ex.kind));
 
-  it("the built-in bank ships JVM-graded java exercises at all", () => {
+  it("the built-in bank ships java content of both graded shapes", () => {
     // Every java check in this file - the floors here and the whole JDK-gated describe
-    // below - iterates this set, so losing the shipped java content would turn all of
-    // them green by iterating nothing. A pack pointed at by ATROPHY_BANK may legitimately
-    // ship no java, so only the built-in bank is held to this.
-    if (validatingBuiltInBank) expect(javaJvm.length).toBeGreaterThan(0);
+    // below - iterates one of these two sets, so losing the shipped java content would
+    // turn all of them green by iterating nothing. Per-kind rather than one combined
+    // count, because they gate different loops: the compiled kinds gate starter
+    // compilation and planted bugs, predict-output gates snippet determinism, and a
+    // bank keeping only one of them would leave the other's loop silently vacuous.
+    // A pack pointed at by ATROPHY_BANK may legitimately ship no java, so only the
+    // built-in bank is held to this. (A sql arm joins these when the first built-in
+    // sql statics land - never before, or the gate fails on the truth.)
+    if (!validatingBuiltInBank) return;
+    expect(javaCode.length, "built-in bank ships no java write/fix/harness content").toBeGreaterThan(0);
+    expect(javaPredicts.length, "built-in bank ships no java predict-output content").toBeGreaterThan(0);
   });
 
   it("every JVM-spawning java exercise allows at least 20s", () => {
@@ -120,14 +135,6 @@ describe("java timeout floors", () => {
     expect(bad.map((ex) => `${ex.id}: ${ex.testTimeoutMs}`)).toEqual([]);
   });
 });
-
-const javaGradedKinds = new Set<string>(JVM_KINDS);
-const javaCode = bank.filter(
-  (e): e is CodeLikeExercise => javaGradedKinds.has(e.kind) && e.language === "java",
-);
-const javaPredicts = bank.filter(
-  (e): e is PredictExercise => e.kind === "predict-output" && e.language === "java",
-);
 
 // Java content is validated only where a toolchain exists; the presence check above
 // guarantees the built-in bank keeps these loops non-empty.

@@ -1,5 +1,6 @@
 import type { ExerciseGenerator } from "../bank/generators/types.js";
 import { AXES, type Axis, type Exercise, type Language } from "../bank/schema.js";
+import { hasJdk } from "./javatool.js";
 import { hexSeed, type Rng } from "./rng.js";
 import { expectedScore } from "./scoring.js";
 
@@ -57,6 +58,28 @@ export function resolveExercise(
 /** A generator family offers many variants, so it outweighs one static file. */
 const GENERATOR_WEIGHT = 2;
 
+/** Which graders this host can actually run. Injected so tests never probe. */
+export interface Toolchains {
+  jdk: boolean;
+}
+
+/** The real probe; `hasJdk` caches its one spawn per process. */
+function hostToolchains(): Toolchains {
+  return { jdk: hasJdk() };
+}
+
+/**
+ * One offer rule for both entry points: the requested language must match ("any"
+ * content matches every request), and the host must be able to grade it. Every java
+ * kind spawns a JVM - predict-output included - so with no JDK each one grades as a
+ * harnessError: noise in the queue, never evidence about the user. Python, JS and sql
+ * have no toolchain to miss (sql rides the bundled better-sqlite3).
+ */
+function offerable(l: Language | "any", language: Language | undefined, toolchains: Toolchains): boolean {
+  const matchesLang = language === undefined || l === language || l === "any";
+  return matchesLang && (l !== "java" || toolchains.jdk);
+}
+
 export interface SelectOptions {
   statics: Exercise[];
   generators?: ExerciseGenerator[];
@@ -67,6 +90,8 @@ export interface SelectOptions {
   recentIds?: string[];
   language?: Language;
   random?: Rng;
+  /** Defaults to this host's real toolchains; tests pass a fake instead. */
+  toolchains?: Toolchains;
 }
 
 /**
@@ -83,10 +108,10 @@ export function selectExercise(opts: SelectOptions): Exercise | undefined {
     recentIds = [],
     language,
     random = Math.random,
+    toolchains = hostToolchains(),
   } = opts;
   const recentFamilies = new Set(recentIds.map(familyOf));
-  const matchesLang = (l: Language | "any") =>
-    language === undefined || l === language || l === "any";
+  const offer = (l: Language | "any") => offerable(l, language, toolchains);
 
   const target = targetTier(rating);
   const tierOrder = [1, 2, 3].sort(
@@ -95,10 +120,10 @@ export function selectExercise(opts: SelectOptions): Exercise | undefined {
 
   for (const tier of tierOrder) {
     const staticPool = statics.filter(
-      (e) => e.axis === axis && e.tier === tier && matchesLang(e.language),
+      (e) => e.axis === axis && e.tier === tier && offer(e.language),
     );
     const genPool = generators.filter(
-      (g) => g.axis === axis && g.tiers.includes(tier) && matchesLang(g.language),
+      (g) => g.axis === axis && g.tiers.includes(tier) && offer(g.language),
     );
     const freshStatics = staticPool.filter((e) => !recentFamilies.has(familyOf(e.id)));
     const freshGens = genPool.filter((g) => !recentFamilies.has(g.family));
@@ -125,17 +150,21 @@ export function selectExercise(opts: SelectOptions): Exercise | undefined {
   return undefined;
 }
 
-/** Axes that actually have content for the given language ("any" counts for every language). */
+/**
+ * Axes that actually have drillable content for the given language ("any" counts for
+ * every language). Same offer rule as `selectExercise`, so an axis is never announced
+ * as available and then found empty when the drill asks for one.
+ */
 export function availableAxes(
   bank: Exercise[],
   language?: Language,
   generators: ExerciseGenerator[] = [],
+  toolchains: Toolchains = hostToolchains(),
 ): Axis[] {
-  const matchesLang = (l: Language | "any") =>
-    language === undefined || l === language || l === "any";
+  const offer = (l: Language | "any") => offerable(l, language, toolchains);
   return AXES.filter(
     (axis) =>
-      bank.some((e) => e.axis === axis && matchesLang(e.language)) ||
-      generators.some((g) => g.axis === axis && matchesLang(g.language)),
+      bank.some((e) => e.axis === axis && offer(e.language)) ||
+      generators.some((g) => g.axis === axis && offer(g.language)),
   );
 }

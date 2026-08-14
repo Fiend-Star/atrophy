@@ -11,7 +11,9 @@ export interface ExerciseGenerator {
   /** Id prefix for generated exercises, e.g. "sr-py-cond". */
   family: string;
   axis: Axis;
-  language: Language;
+  /** "any" for families whose drills are language-agnostic (outline, recall): they are
+   *  offered whatever `--lang` asks for, exactly as an "any" exercise is. */
+  language: Language | "any";
   tiers: readonly number[];
   generate(seed: string, tier: number): Exercise;
 }

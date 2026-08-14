@@ -10,6 +10,7 @@ import { buildPayload, startServer } from "./serve.js";
 import { autoSync, isRegistered, maybePrintPublishHint, publishCommand } from "./publish.js";
 import { configPath, packDirs } from "./config.js";
 import { detectAssistants } from "../engine/guard.js";
+import { hasJdk, javacCommand, missingJdkHint } from "../engine/javatool.js";
 import { availableAxes, resolveExercise, selectExercise } from "../engine/select.js";
 import { previewExercise, runDrill } from "../engine/session.js";
 import { computeStreak } from "../engine/streak.js";
@@ -127,15 +128,26 @@ async function drillOnce(store: Store, flags: DrillFlags): Promise<boolean> {
   } else {
     const axis = flags.axis ? parseAxis(flags.axis) : dueAxis(store, bank, language);
     const recent = store.recentSessions(axis, 6).map((s) => s.exercise_id);
-    ex = selectExercise({
+    const pick = {
       statics: bank,
       generators: allGenerators,
       axis,
       rating: store.getRating(axis).rating,
       recentIds: recent,
       language,
-    });
+    };
+    ex = selectExercise(pick);
     if (!ex) {
+      // Selection hides java content on a host with no JDK, so "no exercises yet" can be
+      // a lie: the drills are sitting right there, ungradable. Ask again as if the JDK
+      // were installed - if that finds one, the toolchain is the real answer.
+      if (!hasJdk() && selectExercise({ ...pick, toolchains: { jdk: true } })) {
+        console.error(
+          pc.yellow(missingJdkHint(javacCommand())) +
+            pc.dim("\n  (java drills for this axis exist - run `atrophy doctor` for the full check)"),
+        );
+        return false;
+      }
       console.error(pc.red(`no exercises in the bank for axis "${axis}"${flags.lang ? ` (${flags.lang})` : ""} yet`));
       return false;
     }

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +7,7 @@ import { gradeCloze } from "../../engine/cloze.js";
 import { grade, gradePrediction, solutionFileName } from "../../engine/grader.js";
 import { JAVA_COMPILE_TIMEOUT_MS, hasJdk, javacCommand } from "../../engine/javatool.js";
 import { run } from "../../engine/runner.js";
-import { isCode, isHarness, type ClozeExercise, type CodeExercise, type PredictExercise } from "../schema.js";
+import { JVM_KINDS, isCode, isHarness, type Axis, type ClozeExercise, type CodeExercise, type Exercise, type PredictExercise } from "../schema.js";
 import { allGenerators } from "./index.js";
 
 const SEEDS = ["a1b2c3", "000000", "ffffff"];
@@ -16,9 +17,51 @@ const SEED_SPREAD = Array.from({ length: 24 }, (_, i) => (i * 0x1111).toString(1
 
 /**
  * Same floor bank-integrity.test.ts puts on static java content: grading these kinds
- * pays javac + JVM cold start, which the schema's 10s default does not cover.
+ * pays javac + JVM cold start, which the schema's 10s default does not cover. Derived
+ * from the schema's compiled-kind list exactly as the bank suite derives it, so this
+ * cannot drift into a stale twin of the exported name.
  */
-const JVM_KINDS = new Set(["write", "fix", "write-harness", "fix-harness", "predict-output"]);
+const JVM_SPAWNING_KINDS = new Set<string>([...JVM_KINDS, "predict-output"]);
+
+/** Content hash of one rendered exercise, key order made irrelevant. */
+function renderHash(ex: Exercise): string {
+  const stable = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(stable);
+    if (v && typeof v === "object") {
+      const out: Record<string, unknown> = {};
+      for (const k of Object.keys(v as Record<string, unknown>).sort()) out[k] = stable((v as Record<string, unknown>)[k]);
+      return out;
+    }
+    return v;
+  };
+  return createHash("sha256").update(JSON.stringify(stable(ex))).digest("hex").slice(0, 16);
+}
+
+/**
+ * Every registered family, frozen: its declared shape plus a hash of what it renders
+ * for seed "a1b2c3" at its first tier. A recorded session stores only `family-<seed>`
+ * and replays by re-rendering, so a family whose output drifts silently rewrites what
+ * the user was actually shown - and the rating it earned stops meaning anything.
+ *
+ * Editing an entry is therefore a deliberate act, not a green-the-suite chore: it says
+ * every session already recorded against that family no longer replays. Adding a family
+ * means adding a row here (the coverage check below fails otherwise).
+ */
+const PINNED = new Map<string, { axis: Axis; language: string; tiers: number[]; render: string }>([
+  ["sr-py-cond", { axis: "syntax-recall", language: "python", tiers: [1, 2], render: "f939f37a0c0ed6fb" }],
+  ["sr-js-cond", { axis: "syntax-recall", language: "javascript", tiers: [1, 2], render: "ee079c2ca7dfe1dd" }],
+  ["sr-java-cond", { axis: "syntax-recall", language: "java", tiers: [1, 2], render: "e44109ec658afeec" }],
+  ["dbg-py-agg", { axis: "debugging", language: "python", tiers: [1, 2], render: "ac1ea0232b7cc350" }],
+  ["dbg-js-agg", { axis: "debugging", language: "javascript", tiers: [1, 2], render: "fa6ce11e4a2e20f0" }],
+  ["dbg-java-scan", { axis: "debugging", language: "java", tiers: [1, 2], render: "b60eefd1fbd12130" }],
+  ["cr-py-alias", { axis: "code-reading", language: "python", tiers: [1, 2], render: "7e717e13a9c1d650" }],
+  ["cr-py-slice", { axis: "code-reading", language: "python", tiers: [1, 2], render: "9ac9d15e1c864b7f" }],
+  ["cr-js-gen", { axis: "code-reading", language: "javascript", tiers: [1, 2, 3], render: "73c911e9ec8e7da4" }],
+  ["cr-java-trace", { axis: "code-reading", language: "java", tiers: [1, 2], render: "9e28719ae7304c1c" }],
+  ["api-py-gen", { axis: "api-memory", language: "python", tiers: [1, 2, 3], render: "27674517a977e04a" }],
+  ["api-js-gen", { axis: "api-memory", language: "javascript", tiers: [1, 2, 3], render: "25c803c487a80fd9" }],
+  ["api-java-blank", { axis: "api-memory", language: "java", tiers: [1, 2], render: "91c234d03930ff16" }],
+]);
 
 const dirs: string[] = [];
 function scratch(): string {
@@ -49,7 +92,7 @@ describe("generator contracts", () => {
           expect(a.tier).toBe(tier);
           expect(a.axis).toBe(g.axis);
           expect(a.language).toBe(g.language);
-          if (a.language === "java" && JVM_KINDS.has(a.kind)) {
+          if (a.language === "java" && JVM_SPAWNING_KINDS.has(a.kind)) {
             expect(a.testTimeoutMs, `${g.family} tier ${tier}`).toBeGreaterThanOrEqual(20_000);
             // Same tier-3 harness clause bank-integrity puts on static java content:
             // the exercise's own checks run on top of compile + startup, and the
@@ -60,6 +103,23 @@ describe("generator contracts", () => {
           }
         }
       }
+    }
+  });
+
+  it("every family still declares its pinned shape and renders byte-for-byte what it always did", () => {
+    expect(allGenerators.map((g) => g.family).sort(), "a family was added or renamed without pinning it").toEqual(
+      [...PINNED.keys()].sort(),
+    );
+    for (const [family, pin] of PINNED) {
+      const g = allGenerators.find((x) => x.family === family);
+      if (!g) throw new Error(`pinned family ${family} is no longer registered`);
+      expect(g.axis, family).toBe(pin.axis);
+      // Concrete, never "any": the widening in bank/generators/types.ts opened that door
+      // for future families and must not have walked an existing one through it.
+      expect(g.language, family).toBe(pin.language);
+      expect([...g.tiers], family).toEqual(pin.tiers);
+      const ex = g.generate("a1b2c3", g.tiers[0]!);
+      expect(renderHash(ex), `${family}: rendered output drifted - recorded sessions no longer replay`).toBe(pin.render);
     }
   });
 
