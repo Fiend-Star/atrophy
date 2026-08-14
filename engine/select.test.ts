@@ -290,6 +290,28 @@ describe("selectExercise - toolchain filtering", () => {
     });
     expect(pick?.id.startsWith("dec-any-gen-")).toBe(true);
   });
+
+  it("keeps a java-tagged recall on offer with no JDK, and off a python request", () => {
+    // A recall about JVM flags is java content that starts no JVM: the tag steers --lang,
+    // the JDK gate is only for the kinds that spawn one.
+    const javaRecall: Exercise = {
+      id: "api-java-recall-001",
+      kind: "recall",
+      axis: "api-memory",
+      language: "java",
+      tier: 1,
+      title: "jvm flags",
+      prompt: "p",
+      softTimeLimitSeconds: 300,
+      testTimeoutMs: 10_000,
+      acceptedAnswers: ["-XX:+HeapDumpOnOutOfMemoryError"],
+    };
+    const draw = (language: "java" | "python") =>
+      selectExercise({ statics: [javaRecall], axis: "api-memory", rating: 1150, language, random: () => 0, toolchains: NO_JDK });
+    expect(draw("java")?.id).toBe("api-java-recall-001");
+    expect(hiddenByToolchain({ statics: [javaRecall], axis: "api-memory", language: "java", toolchains: NO_JDK })).toBe(0);
+    expect(draw("python")).toBeUndefined();
+  });
 });
 
 describe("hiddenByToolchain", () => {

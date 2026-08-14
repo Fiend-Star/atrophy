@@ -79,6 +79,16 @@ const baseFields = {
 const submitPolicySchema = z.enum(["loop", "single"]).optional();
 
 /**
+ * The `Language | "any"` shape generator families already declare, for kinds that grade
+ * nothing: "any" means genuinely language-agnostic (offered whatever `--lang` asks for),
+ * and a concrete language is a real tag - a drill about JVM flags or SQL window functions
+ * presupposes its runtime even though answering it starts no toolchain. There is no
+ * default: an untagged drill would silently become agnostic, which is the bug this exists
+ * to make sayable.
+ */
+const agnosticLanguage = z.union([z.enum(LANGUAGES), z.literal("any")]);
+
+/**
  * Kinds where the user edits code that gets run against hidden tests - except sql
  * writes, which have no function to call and are graded by `cases` instead. The
  * either/or is not expressible in the object shape, so the fields are optional here
@@ -157,7 +167,7 @@ const exerciseUnion = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("recall"),
     ...baseFields,
-    language: z.literal("any"),
+    language: agnosticLanguage,
     acceptedAnswers: z.array(z.string().min(1)).min(1),
     /** Derivation shown after grading; never graded. */
     reveal: z.string().min(1).optional(),

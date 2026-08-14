@@ -130,12 +130,21 @@ describe("recall kind", () => {
     expect(parsedNoReveal.kind).toBe("recall");
     expect(parsedNoReveal.reveal).toBeUndefined();
   });
-  it("counts one unit and rejects concrete languages, empty answers, and blank strings", () => {
+  it("counts one unit and rejects empty answers and blank strings", () => {
     expect(totalUnits(parseExercise(JSON.stringify(recall)))).toBe(1);
-    expect(() => parseExercise(JSON.stringify({ ...recall, language: "java" }))).toThrow(BankError);
     expect(() => parseExercise(JSON.stringify({ ...recall, acceptedAnswers: [] }))).toThrow(BankError);
     expect(() => parseExercise(JSON.stringify({ ...recall, acceptedAnswers: [""] }))).toThrow(BankError);
     expect(() => parseExercise(JSON.stringify({ ...recall, reveal: "" }))).toThrow(BankError);
+  });
+  it("takes a concrete language as well as \"any\", and still nothing else", () => {
+    // A drill about JVM flags or SQL window functions is not language-agnostic just
+    // because answering it runs no toolchain; "any" stays the tag for the ones that are.
+    for (const language of ["java", "sql", "python", "javascript", "any"]) {
+      const parsed = parseExercise(JSON.stringify({ ...recall, language })) as RecallExercise;
+      expect(parsed.language).toBe(language);
+    }
+    expect(() => parseExercise(JSON.stringify({ ...recall, language: "rust" }))).toThrow(BankError);
+    expect(() => parseExercise(JSON.stringify({ ...recall, language: undefined }))).toThrow(BankError);
   });
 });
 
