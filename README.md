@@ -59,14 +59,14 @@ Not every skill is "write code against tests" - see the table below.
 
 | Skill | The drill | Graded by |
 |---|---|---|
-| **Syntax recall** | Write a small function from a spec | Hidden tests |
+| **Syntax recall** | Write a small function from a spec, or one SQL `SELECT` against a fixture schema | Hidden tests - for SQL, the rows the query returns |
 | **Debugging** | Working-looking code has one planted bug - find and fix it | Hidden tests |
 | **Code reading** | Read a snippet, type exactly what it prints | Compared to the snippet's real output |
-| **API memory** | Fill in the blanked-out stdlib call | Answer match |
-| **Decomposition** | Outline a design (rate limiter, folder sync…) in bullets | You score yourself against a revealed rubric |
+| **API memory** | Fill in the blanked-out stdlib call (a snippet may blank several, each its own point), implement the API against a shipped harness, or - in packs - answer a short recall question outright | Answer match, or harness checks |
+| **Decomposition** | Outline a design (rate limiter, folder sync…) in bullets - or build the thing: a data structure against tests, a concurrent one against its own harness | Self-scored against a revealed rubric; the build drills by tests or harness checks |
 
-The built-in bank spans Python, JavaScript and Java across three tiers - a
-hand-written static bank plus **generator families that render endless fresh
+The built-in bank spans Python, JavaScript, Java and SQL across three tiers -
+a hand-written static bank plus **generator families that render endless fresh
 variants** (randomized data, names, and twists; same seed always reproduces
 the same exercise). Difficulty targets *you*: each drill picks the tier where
 your predicted success is closest to ~65%, the point where a rep carries the
@@ -78,6 +78,13 @@ own Java test harness, so it can grade concurrency - races, deadlocks,
 visibility - instead of a return value. Java ships on every skill - 21 static
 exercises plus four generator families - and you can add more of your own as
 a pack (see Packs).
+
+SQL drills (`--lang sql`) need no toolchain at all: you submit a single
+`SELECT`, and it runs against the exercise's own fixture schema inside the
+bundled SQLite that already stores your ratings. Each exercise carries
+several cases with different fixtures, and grading compares the rows your
+query returns to the expected rows case by case - so a query that hardcodes
+one case's answer scores exactly that one case.
 
 ## The dashboard
 
@@ -141,7 +148,7 @@ atrophy baseline
 | `atrophy baseline` | First session: one drill per skill (~25 min) |
 | `atrophy drill` | One drill on your most-neglected skill |
 | `atrophy drill --axis debugging` | Drill a specific skill (`syntax-recall`, `debugging`, `code-reading`, `api-memory`, `decomposition`) |
-| `atrophy drill --lang python` | Only Python (or `javascript`, `java`) exercises |
+| `atrophy drill --lang python` | Only Python (or `javascript`, `java`, `sql`) exercises |
 | `atrophy drill --ai-on` | Monthly comparison rep with AI allowed |
 | `atrophy publish --handle you` | Opt in to the [public leaderboard](https://ashutosh-rath02.github.io/atrophy/leaderboard.html); afterwards every drill syncs automatically (`--stop` opts out) |
 | `atrophy stats` | Ratings table and week streak in the terminal |
@@ -193,7 +200,7 @@ directories you trust.
 git clone https://github.com/ashutosh-rath02/atrophy.git
 cd atrophy && npm install
 npm run dev -- drill    # CLI from source
-npm test                # 230+ tests, incl. real grading subprocesses
+npm test                # 330+ tests, incl. real grading subprocesses
 ```
 
 New exercises are the most welcome contribution: one JSON file under
@@ -207,6 +214,13 @@ drills use `"kind": "write-harness"` or `"fix-harness"` and ship their own
 `testCode` - a `public class Harness` with a `main` that prints the result
 line - plus `totalChecks`, the number of checks that harness must report.
 CI compiles every Java starter and holds the harness to that count.
+
+SQL exercises (`"language": "sql"`) carry `cases` instead of `tests`: each
+case is a `fixture` of `CREATE`/`INSERT` statements plus the `expectedRows`
+the answer must return. CI applies every fixture twice to prove it builds the
+same database both times, and it synthesizes the hardcoded-literal answer for
+each exercise and requires that it fail at least one case - a question one
+literal could answer cannot merge.
 
 Roadmap: LLM-judged decomposition drills, more languages, spaced-repetition
 scheduling (FSRS), per-axis leaderboards. More to be added soon.
