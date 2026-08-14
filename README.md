@@ -63,7 +63,7 @@ Not every skill is "write code against tests" - see the table below.
 | **Debugging** | Working-looking code has one planted bug - find and fix it | Hidden tests |
 | **Code reading** | Read a snippet, type exactly what it prints | Compared to the snippet's real output |
 | **API memory** | Fill in the blanked-out stdlib call, or implement the API against a shipped harness. Packs add two more shapes: a short recall question, and a multi-blank snippet scored one point per blank | Answer match, or harness checks |
-| **Decomposition** | Outline a design (rate limiter, folder sync…) in bullets - or build it: an algorithm against tests, a concurrent structure against its own harness | Self-scored against a revealed rubric; the build drills by tests or harness checks |
+| **Decomposition** | Outline a design (rate limiter, folder sync…) in bullets - or build it: an algorithm against tests, a data structure against its own harness | Self-scored against a revealed rubric; the build drills by tests or harness checks |
 
 The built-in bank spans Python, JavaScript, Java and SQL across three tiers -
 a hand-written static bank plus **generator families that render endless fresh
@@ -150,7 +150,7 @@ atrophy baseline
 | `atrophy baseline` | First session: one drill per skill (~25 min) |
 | `atrophy drill` | One drill on your most-neglected skill |
 | `atrophy drill --axis debugging` | Drill a specific skill (`syntax-recall`, `debugging`, `code-reading`, `api-memory`, `decomposition`) |
-| `atrophy drill --lang python` | Restrict to Python (or `javascript`, `java`, `sql`) - language-agnostic drills still qualify, so a rep may come back in no language at all |
+| `atrophy drill --lang python` | Restrict to Python (or `javascript`, `java`, `sql`) - language-agnostic drills still qualify, so a rep may come back in no language at all; packs may add drills that declare no language, and those qualify too |
 | `atrophy drill --ai-on` | Monthly comparison rep with AI allowed |
 | `atrophy publish --handle you` | Opt in to the [public leaderboard](https://ashutosh-rath02.github.io/atrophy/leaderboard.html); afterwards every drill syncs automatically (`--stop` opts out) |
 | `atrophy stats` | Ratings table and week streak in the terminal |
