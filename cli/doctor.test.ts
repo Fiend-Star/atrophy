@@ -108,13 +108,26 @@ describe("checkGrading", () => {
 });
 
 describe("checkSql", () => {
-  it("passes and names the bundled engine's version", () => {
+  it("passes and reports the engine's own SQLite version", () => {
     const r = checkSql();
     expect(r.name).toBe("SQL (SQLite)");
     expect(r.status).toBe("pass");
-    // The version is the point: it tells a user reporting a grading difference which
-    // SQLite they actually ran, and there is no $ATROPHY_SQL to point them at instead.
-    expect(r.detail).toMatch(/better-sqlite3 \d+\.\d+/);
+    // SQLite's version, not the npm package's, is what explains a grading difference
+    // between two machines - and reading it from a real query is what proves the
+    // native module loaded rather than merely resolved.
+    expect(r.detail).toMatch(/SQLite \d+\.\d+\.\d+/);
+  });
+  it("warns rather than failing when the probe throws", () => {
+    // sql needs no toolchain, so there is nothing here for a user to go install: a
+    // doctor that exits 1 over its own probe sends them hunting for a phantom.
+    const r = checkSql(() => {
+      throw new Error("addon not loadable");
+    });
+    expect(r.status).toBe("warn");
+    expect(r.detail).toContain("addon not loadable");
+  });
+  it("warns when the probe answers nothing", () => {
+    expect(checkSql(() => "").status).toBe("warn");
   });
 });
 

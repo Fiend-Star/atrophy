@@ -104,6 +104,29 @@ describe("sql grading - reporting", () => {
   });
 });
 
+describe("sql grading - a broken fixture is an exercise bug", () => {
+  const brokenEx = sqlExercise({
+    id: "sr-sql-906", axis: "syntax-recall", tier: 1, title: "t", prompt: "keys", softTimeLimitSeconds: 60,
+    kind: "write", language: "sql", starterCode: "-- SELECT ...",
+    cases: [
+      { fixture: "CREATE TABLE t(k TEXT); INSERT INTO t VALUES ('a');", expectedRows: [{ k: "a" }] },
+      // Unterminated INSERT: bank-authored, and nothing the user could have done about it.
+      { fixture: "CREATE TABLE t(k TEXT); INSERT INTO t VALUES ('b'", expectedRows: [{ k: "b" }] },
+    ],
+  });
+
+  it("reports a harnessError naming the case instead of scoring the user", async () => {
+    const r = await grade(brokenEx, solve("SELECT k FROM t"));
+    expect(r.harnessError).toBeDefined();
+    expect(r.harnessError).toContain("case 2");
+    expect(r.harnessError).toMatch(/fixture/i);
+    // The query was right for case 1, so the danger is a plausible-looking 1/2: `passed`
+    // is what reaches the rating, and a bank bug is not evidence about the user.
+    expect(r.passed).toBe(0);
+    expect(r.failures).toEqual([]);
+  });
+});
+
 describe("sql grading - ordered", () => {
   const orderedEx = sqlExercise({
     id: "sr-sql-904", axis: "syntax-recall", tier: 1, title: "t", prompt: "keys, ascending",

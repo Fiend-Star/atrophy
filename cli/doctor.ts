@@ -1,3 +1,4 @@
+import Database from "better-sqlite3";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -126,21 +127,54 @@ export function checkJava(): CheckResult {
   return { name: "Java (JDK)", status: "warn", detail: missingJdkHint(cmd) };
 }
 
+/** SQLite's own version, from a real query - which also proves the native addon loaded. */
+function sqliteVersion(): string {
+  const db = new Database(":memory:");
+  try {
+    const row = db.prepare("SELECT sqlite_version() AS version").get() as { version?: string } | undefined;
+    return row?.version ?? "";
+  } finally {
+    db.close();
+  }
+}
+
 /**
- * SQL drills need no toolchain of their own: the same better-sqlite3 the store runs on
- * is the engine that grades them, so this reports a version rather than a search. It
- * can only fail on an install so broken that `atrophy` itself would not have started.
+ * The npm package version, when it can be had. Strictly a nice-to-have beside the
+ * SQLite number: `better-sqlite3/package.json` is reachable today, but a release that
+ * adds an `exports` map would close that door, so it must never decide the check.
  */
-export function checkSql(): CheckResult {
+function betterSqliteVersion(): string {
   try {
     const pkg = createRequire(import.meta.url)("better-sqlite3/package.json") as { version?: string };
+    return pkg.version ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * SQL drills need no toolchain of their own: the same better-sqlite3 the store runs on
+ * is the engine that grades them, so this reports a version rather than a search. The
+ * SQLite version is the one that explains why two machines graded a query differently.
+ * `probe` is injectable for tests.
+ */
+export function checkSql(probe: () => string = sqliteVersion): CheckResult {
+  const name = "SQL (SQLite)";
+  // Warn, never fail: there is nothing here for a user to go install, so exiting 1 over
+  // our own probe would send them hunting for a problem they cannot fix.
+  try {
+    const version = probe();
+    if (!version) {
+      return { name, status: "warn", detail: "SQLite answered no version - sql drills may not grade" };
+    }
+    const pkg = betterSqliteVersion();
     return {
-      name: "SQL (SQLite)",
+      name,
       status: "pass",
-      detail: `better-sqlite3 ${pkg.version ?? "(unknown version)"} - bundled, nothing to install`,
+      detail: `SQLite ${version}${pkg ? ` via better-sqlite3 ${pkg}` : ""} - bundled, nothing to install`,
     };
   } catch (err) {
-    return { name: "SQL (SQLite)", status: "fail", detail: `better-sqlite3 not loadable: ${(err as Error).message}` };
+    return { name, status: "warn", detail: `SQLite probe failed: ${(err as Error).message}` };
   }
 }
 

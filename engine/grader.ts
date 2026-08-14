@@ -178,43 +178,69 @@ try {
 const cases = ${JSON.stringify(ex.cases)};
 const ordered = ${JSON.stringify(ex.ordered === true)};
 ${SQL_CANON_SOURCE}
+const msg = (err) => String(err && err.message || err);
 const preview = (rows) => {
   const s = JSON.stringify(rows);
   return s.length > 300 ? s.slice(0, 300) + "..." : s;
 };
 
-let passed = 0;
-const failures = [];
-cases.forEach((c, i) => {
-  let db;
+// One case has three possible verdicts, and the third is the important one: the
+// exercise itself is broken ("bug"), which is not a score at all.
+const runCase = (c, i) => {
+  const db = new Database(":memory:");
   try {
-    db = new Database(":memory:");
-    db.exec(c.fixture);
-    // The fixture is bank-authored and has already run; everything after it is the
-    // user's answer, and an answer is a read. query_only turns a DELETE-then-SELECT
-    // "solution" into a named error instead of a pass.
-    db.pragma("query_only = 1");
-    const rows = db.prepare(sql).all();
-    if (canonicalRows(rows, ordered) === canonicalRows(c.expectedRows, ordered)) passed += 1;
-    else {
-      failures.push({
-        index: i,
+    try {
+      db.exec(c.fixture);
+      // The fixture is bank-authored and has just run; everything after it is the
+      // user's answer, and an answer is a read. query_only turns a DELETE-then-SELECT
+      // "solution" into a named error instead of a pass.
+      db.pragma("query_only = 1");
+    } catch (err) {
+      // A fixture that will not build is nothing the user did.
+      return { bug: "case " + (i + 1) + " fixture failed: " + msg(err) };
+    }
+    try {
+      const rows = db.prepare(sql).all();
+      if (canonicalRows(rows, ordered) === canonicalRows(c.expectedRows, ordered)) return { ok: true };
+      return {
         error: "case " + (i + 1) + ": wrong rows" +
           "\\n  expected: " + preview(c.expectedRows) +
           "\\n  got:      " + preview(rows),
-      });
+      };
+    } catch (err) {
+      // A syntax error, a multi-statement submission or a write attempt is a failed
+      // case, not a crash: the other cases still run and the user still gets a score.
+      return { error: "case " + (i + 1) + ": " + msg(err) };
     }
-  } catch (err) {
-    // A syntax error, a multi-statement submission or a write attempt is a failed
-    // case, not a crash: the other cases still run and the user still gets a score.
-    failures.push({ index: i, error: "case " + (i + 1) + ": " + String(err && err.message || err) });
   } finally {
-    if (db) {
-      try { db.close(); } catch { /* the process is about to exit anyway */ }
-    }
+    try { db.close(); } catch { /* the process is about to exit anyway */ }
   }
-});
-console.log("ATROPHY_RESULT " + JSON.stringify({ passed, total: cases.length, failures }));
+};
+
+let passed = 0;
+const failures = [];
+let bug = null;
+for (let i = 0; i < cases.length && bug === null; i++) {
+  const verdict = runCase(cases[i], i);
+  if (verdict.bug) bug = verdict.bug;
+  else if (verdict.ok) passed += 1;
+  else failures.push({ index: i, error: verdict.error });
+}
+
+const emit = (r) => console.log("ATROPHY_RESULT " + JSON.stringify(r));
+// A bank bug voids the whole attempt instead of reporting the cases that did grade:
+// \`passed\` is what reaches the rating, and "1/2, because case 2 is malformed" is
+// indistinguishable to the user from their own half-right answer.
+if (bug !== null) {
+  emit({
+    passed: 0,
+    total: cases.length,
+    failures: [],
+    harnessError: "exercise bug: " + bug + " - please report this exercise",
+  });
+} else {
+  emit({ passed, total: cases.length, failures });
+}
 `;
 }
 

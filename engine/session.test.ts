@@ -240,6 +240,31 @@ describe("runDrill - sql", () => {
     expect(outcome.total).toBe(2);
     expect(output).toContain("2/2 tests passed");
   }, 30_000);
+
+  it("abandons rather than scoring 0 when the exercise's own fixture is broken", async () => {
+    const brokenFixture: SqlWriteExercise = {
+      ...sqlEx,
+      id: "sr-sql-951",
+      cases: [
+        { fixture: "CREATE TABLE t(k TEXT, v INT); INSERT INTO t VALUES ('a',1);", expectedRows: [{ k: "a", s: 1 }] },
+        // Unterminated INSERT - a bank bug, reached only after case 1 has already passed.
+        { fixture: "CREATE TABLE t(k TEXT, v INT); INSERT INTO t VALUES ('z',7", expectedRows: [{ k: "z", s: 7 }] },
+      ],
+    };
+    const { lines, restore } = captureLog();
+    let outcome: DrillOutcome;
+    try {
+      outcome = await runDrill(brokenFixture, solutionFile(sqlEx.starterCode));
+    } finally {
+      restore();
+    }
+    // Abandoned is what stops cli/index.ts recording the session: a broken exercise must
+    // not move the unaided rating, exactly as a missing JDK must not.
+    expect(outcome.abandoned).toBe(true);
+    expect(outcome.passed).toBe(0);
+    expect(outcome.score).toBe(0);
+    expect(lines.join("\n")).toContain("Your code did not run");
+  }, 30_000);
 });
 
 if (!hasJdk()) console.warn("⚠ JDK not found - harness drill session tests SKIPPED. Install JDK 21 to validate them.");
