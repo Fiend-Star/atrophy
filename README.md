@@ -59,11 +59,11 @@ Not every skill is "write code against tests" - see the table below.
 
 | Skill | The drill | Graded by |
 |---|---|---|
-| **Syntax recall** | Write a small function from a spec, or one SQL `SELECT` against a fixture schema | Hidden tests - for SQL, the rows the query returns |
+| **Syntax recall** | Write a small function from a spec, one SQL `SELECT` against a fixture schema, or a concurrency primitive against its own harness | Hidden tests - for SQL, the rows the query returns; harness checks for the harness drills |
 | **Debugging** | Working-looking code has one planted bug - find and fix it | Hidden tests |
 | **Code reading** | Read a snippet, type exactly what it prints | Compared to the snippet's real output |
-| **API memory** | Fill in the blanked-out stdlib call (a snippet may blank several, each its own point), implement the API against a shipped harness, or - in packs - answer a short recall question outright | Answer match, or harness checks |
-| **Decomposition** | Outline a design (rate limiter, folder sync…) in bullets - or build the thing: a data structure against tests, a concurrent one against its own harness | Self-scored against a revealed rubric; the build drills by tests or harness checks |
+| **API memory** | Fill in the blanked-out stdlib call, or implement the API against a shipped harness. Packs add two more shapes: a short recall question, and a multi-blank snippet scored one point per blank | Answer match, or harness checks |
+| **Decomposition** | Outline a design (rate limiter, folder sync…) in bullets - or build it: an algorithm against tests, a concurrent structure against its own harness | Self-scored against a revealed rubric; the build drills by tests or harness checks |
 
 The built-in bank spans Python, JavaScript, Java and SQL across three tiers -
 a hand-written static bank plus **generator families that render endless fresh
@@ -131,10 +131,12 @@ measure: [docs/research.md](docs/research.md).
 Requires Node.js ≥ 22. Python 3 on `PATH` grades the Python exercises; a JDK
 ≥ 21 (Temurin recommended) grades the Java ones. A drill can only be graded
 if its language's toolchain is installed, so install whichever you plan to
-practise - `atrophy doctor` reports what it found. On Windows, if the `javac`
-on your `PATH` is a `.cmd`/`.bat` shim (some version managers install one),
-point `ATROPHY_JAVA_HOME` at the JDK directory instead: grading runs the
-toolchain without a shell, which cannot execute shims.
+practise - `atrophy doctor` reports what it found. SQL is the exception and
+needs nothing installed: it grades on the SQLite the package already bundles.
+On Windows, if the `javac` on your `PATH` is a `.cmd`/`.bat` shim (some
+version managers install one), point `ATROPHY_JAVA_HOME` at the JDK directory
+instead: grading runs the toolchain without a shell, which cannot execute
+shims.
 
 ```sh
 npm install -g atrophy
@@ -148,7 +150,7 @@ atrophy baseline
 | `atrophy baseline` | First session: one drill per skill (~25 min) |
 | `atrophy drill` | One drill on your most-neglected skill |
 | `atrophy drill --axis debugging` | Drill a specific skill (`syntax-recall`, `debugging`, `code-reading`, `api-memory`, `decomposition`) |
-| `atrophy drill --lang python` | Only Python (or `javascript`, `java`, `sql`) exercises |
+| `atrophy drill --lang python` | Restrict to Python (or `javascript`, `java`, `sql`) - language-agnostic drills still qualify, so a rep may come back in no language at all |
 | `atrophy drill --ai-on` | Monthly comparison rep with AI allowed |
 | `atrophy publish --handle you` | Opt in to the [public leaderboard](https://ashutosh-rath02.github.io/atrophy/leaderboard.html); afterwards every drill syncs automatically (`--stop` opts out) |
 | `atrophy stats` | Ratings table and week streak in the terminal |
