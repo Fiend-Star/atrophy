@@ -88,6 +88,7 @@ function makeCondGenerator(
   return {
     family,
     axis: "syntax-recall",
+    kind: "write",
     language,
     tiers: [1, 2],
     generate(seed, tier) {

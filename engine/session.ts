@@ -323,10 +323,12 @@ async function codeDrill(ex: CodeLikeExercise, solutionOverride?: string): Promi
 
         const result = await grade(ex, dir);
         // A harnessError is never drill evidence: a missing JDK, a broken install, a
-        // javac error or a bad exercise fixture produced no graded checks. So it does
-        // not burn a single-submission drill, is not reported as a score (0/n would read
-        // as a verdict on the user), and - crucially - does not arm "s", which ends the
-        // drill at the last result and lets drillOnce record it. The loop just stays open.
+        // javac error, a bad exercise fixture - or, in *any* language, a timeout, which
+        // parseMarker reports here because a killed run prints no marker line. None of
+        // them produced a graded check. So it does not burn a single-submission drill,
+        // is not reported as a score (0/n would read as a verdict on the user), and -
+        // crucially - does not arm "s", which ends the drill at the last result and lets
+        // drillOnce record it. The loop just stays open: fix the code, submit again.
         if (result.harnessError) {
           printFailures(result);
           continue;

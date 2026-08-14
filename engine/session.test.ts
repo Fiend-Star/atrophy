@@ -190,6 +190,27 @@ describe("runDrill - whiteboard mode (submitPolicy: single)", () => {
 
 // Deliberately outside the JDK gate: the point is what happens when there is no JDK.
 describe("runDrill - interactive when grading never ran", () => {
+  it("treats a python timeout the same way - no score, no stop, no rating move", async () => {
+    // A timeout arrives as a harnessError in every language (parseMarker turns a run
+    // that printed no marker into one), so this rule is not java-only: an infinite loop
+    // means the checks never ran, and "0/1 tests passed" would be a verdict on a drill
+    // that produced no evidence. The user fixes the loop and submits again.
+    const spinner: CodeExercise = {
+      ...pyEx,
+      id: "sr-py-951",
+      title: "spin",
+      functionName: "spin",
+      starterCode: "def spin(n):\n    while True:\n        pass\n",
+      testTimeoutMs: 3_000,
+    };
+    const { outcome, output, prompts } = await driveDrill(spinner, ["", "", "s", "q"]);
+    expect(output).toContain("timed out");
+    expect(output).not.toContain("tests passed");
+    expect(prompts).not.toContain("stop here");
+    expect(outcome.abandoned).toBe(true);
+    expect(outcome.score).toBe(0);
+  }, 30_000);
+
   it("offers no way to stop on a harnessError, so 's' cannot record a 0/n", async () => {
     // The rating-integrity leg of the same invariant the --solution test below pins.
     // "s" ends the drill at the last graded result, and drillOnce records that outcome -

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ExerciseGenerator } from "../bank/generators/types.js";
 import type { Exercise } from "../bank/schema.js";
-import { availableAxes, familyOf, resolveExercise, selectExercise, targetTier } from "./select.js";
+import { availableAxes, familyOf, hiddenByToolchain, resolveExercise, selectExercise, targetTier } from "./select.js";
 
 /** Toolchain fakes: every test says out loud which graders the host can run. */
 const JDK = { jdk: true };
@@ -37,13 +37,42 @@ const outlineEx: Exercise = {
   rubric: ["a"],
 };
 
+/** A java cloze: java content that no JVM ever grades. */
+function clozeEx(id: string, axis: Exercise["axis"], language: "python" | "java"): Exercise {
+  return {
+    id,
+    kind: "cloze",
+    axis,
+    language,
+    tier: 1,
+    title: id,
+    prompt: "p",
+    softTimeLimitSeconds: 60,
+    testTimeoutMs: 10_000,
+    snippet: "____",
+    acceptedAnswers: ["a"],
+  };
+}
+
 function fakeGen(family: string, tiers: number[], language: "python" | "javascript" | "java" = "python"): ExerciseGenerator {
   return {
     family,
     axis: "syntax-recall",
+    kind: "write",
     language,
     tiers,
     generate: (seed, tier) => ({ ...ex(`${family}-${seed}`, tier, language), title: family }),
+  };
+}
+
+function fakeClozeGen(family: string, language: "python" | "java"): ExerciseGenerator {
+  return {
+    family,
+    axis: "api-memory",
+    kind: "cloze",
+    language,
+    tiers: [1],
+    generate: (seed) => clozeEx(`${family}-${seed}`, "api-memory", language),
   };
 }
 
@@ -51,6 +80,7 @@ function fakeGen(family: string, tiers: number[], language: "python" | "javascri
 const anyGen: ExerciseGenerator = {
   family: "dec-any-gen",
   axis: "decomposition",
+  kind: "outline",
   language: "any",
   tiers: [1],
   generate: (seed, tier) => ({ ...outlineEx, id: `dec-any-gen-${seed}`, tier }),
@@ -181,14 +211,15 @@ describe("selectExercise", () => {
 });
 
 describe("selectExercise - toolchain filtering", () => {
-  const javaStatic = ex("sr-java-001", 1, "java");
+  const javaStatic = ex("sr-java-001", 1, "java"); // a write: javac + JVM to grade
   const javaGen = fakeGen("sr-java-cond", [1], "java");
   const mixed = [javaStatic, ex("sr-py-001", 1)];
   const opts = { axis: "syntax-recall" as const, rating: 1150, random: () => 0 };
 
-  it("offers no java drill at all when the host has no JDK", () => {
-    // Every java kind spawns a JVM (predict-output included), so without a JDK each one
-    // would grade as a harnessError - noise in the queue, never evidence about the user.
+  it("offers no JVM-graded java drill when the host has no JDK", () => {
+    // write/fix/harness compile and run; predict-output runs through the source
+    // launcher. Without a JDK none of them can produce a graded result, so offering
+    // one only costs the user a drill that ends in an abandoned outcome.
     const pick = selectExercise({
       ...opts,
       statics: [javaStatic],
@@ -215,7 +246,32 @@ describe("selectExercise - toolchain filtering", () => {
     expect(pick).toBeUndefined();
   });
 
-  it("leaves python and javascript alone - only java has a probe to fail", () => {
+  it("keeps java drills that no JVM grades - a cloze is string-matched in-process", () => {
+    const javaCloze = clozeEx("api-java-950", "syntax-recall", "java");
+    const pick = selectExercise({
+      ...opts,
+      statics: [javaStatic, javaCloze],
+      generators: [javaGen],
+      language: "java",
+      toolchains: NO_JDK,
+    });
+    expect(pick?.id).toBe("api-java-950");
+  });
+
+  it("keeps a java cloze family for the same reason", () => {
+    const pick = selectExercise({
+      statics: [],
+      generators: [fakeClozeGen("api-java-blank", "java")],
+      axis: "api-memory",
+      rating: 1150,
+      language: "java",
+      random: () => 0,
+      toolchains: NO_JDK,
+    });
+    expect(pick?.id.startsWith("api-java-blank-")).toBe(true);
+  });
+
+  it("leaves python and javascript alone - only java grading needs a JDK", () => {
     // No --lang here: the java half of the pool is dropped, the rest still drills.
     const pick = selectExercise({ ...opts, statics: mixed, toolchains: NO_JDK });
     expect(pick?.id).toBe("sr-py-001");
@@ -236,21 +292,50 @@ describe("selectExercise - toolchain filtering", () => {
   });
 });
 
+describe("hiddenByToolchain", () => {
+  const javaStatic = ex("sr-java-001", 1, "java");
+  const javaGen = fakeGen("sr-java-cond", [1], "java");
+  const base = {
+    statics: [javaStatic, clozeEx("api-java-950", "syntax-recall", "java"), ex("sr-py-001", 1)],
+    generators: [javaGen],
+    axis: "syntax-recall" as const,
+  };
+
+  it("counts the JVM-graded java drills a missing JDK removed, statics and families alike", () => {
+    expect(hiddenByToolchain({ ...base, toolchains: NO_JDK })).toBe(2); // the write + the family
+  });
+
+  it("counts nothing when the host has a JDK", () => {
+    expect(hiddenByToolchain({ ...base, toolchains: JDK })).toBe(0);
+  });
+
+  it("counts nothing for a language whose drills were never offered here anyway", () => {
+    expect(hiddenByToolchain({ ...base, language: "python", toolchains: NO_JDK })).toBe(0);
+  });
+
+  it("ignores other axes", () => {
+    expect(hiddenByToolchain({ ...base, axis: "debugging", toolchains: NO_JDK })).toBe(0);
+  });
+});
+
 describe("availableAxes", () => {
   const mk = (axis: string, language: string) =>
     ({ id: `x-${axis}-${language}`, kind: "cloze", axis, language, tier: 1, title: "t", prompt: "p", softTimeLimitSeconds: 60, testTimeoutMs: 10_000, snippet: "____", acceptedAnswers: ["a"] }) as unknown as Exercise;
-  const bank = [mk("api-memory", "java"), mk("code-reading", "python"), { ...(mk("decomposition", "any") as object), kind: "outline", rubric: ["r"] } as unknown as Exercise];
+  // api-memory's java content is a cloze (no JVM); syntax-recall's is a write (javac).
+  const javaWrite = ex("sr-java-001", 1, "java");
+  const bank = [javaWrite, mk("api-memory", "java"), mk("code-reading", "python"), { ...(mk("decomposition", "any") as object), kind: "outline", rubric: ["r"] } as unknown as Exercise];
   it("filters axes by language, counting language-any exercises for every filter", () => {
     // Toolchains are explicit here and below: the real probe would make these assertions
     // depend on whether the machine running the suite happens to have a JDK.
-    expect(availableAxes(bank, "java", [], JDK)).toEqual(["api-memory", "decomposition"]);
+    expect(availableAxes(bank, "java", [], JDK)).toEqual(["syntax-recall", "api-memory", "decomposition"]);
     expect(availableAxes(bank, "python", [], JDK)).toEqual(["code-reading", "decomposition"]);
-    expect(availableAxes(bank, undefined, [], JDK)).toEqual(["code-reading", "api-memory", "decomposition"]);
+    expect(availableAxes(bank, undefined, [], JDK)).toEqual(["syntax-recall", "code-reading", "api-memory", "decomposition"]);
   });
 
-  it("hides java axes when the host has no JDK, language-any ones survive", () => {
-    expect(availableAxes(bank, "java", [], NO_JDK)).toEqual(["decomposition"]);
-    expect(availableAxes(bank, undefined, [], NO_JDK)).toEqual(["code-reading", "decomposition"]);
+  it("hides only the axes whose java content needs a JVM", () => {
+    // syntax-recall goes (its java content is a write), api-memory stays (a cloze).
+    expect(availableAxes(bank, "java", [], NO_JDK)).toEqual(["api-memory", "decomposition"]);
+    expect(availableAxes(bank, undefined, [], NO_JDK)).toEqual(["code-reading", "api-memory", "decomposition"]);
   });
 });
 
@@ -258,6 +343,7 @@ describe("availableAxes with generators", () => {
   const javaGen: ExerciseGenerator = {
     family: "sr-java-test",
     axis: "syntax-recall",
+    kind: "write",
     language: "java",
     tiers: [1],
     generate() {
@@ -277,8 +363,11 @@ describe("availableAxes with generators", () => {
     expect(availableAxes([], "python", [javaGen], JDK)).toEqual([]);
   });
 
-  it("drops a java-only axis when the host has no JDK", () => {
+  it("drops an axis whose only java family is JVM-graded when the host has no JDK", () => {
     expect(availableAxes([], "java", [javaGen], NO_JDK)).toEqual([]);
+    // The declared kind is the whole filter here: availableAxes must never render a
+    // variant to find out what a family produces.
+    expect(availableAxes([], "java", [fakeClozeGen("api-java-blank", "java")], NO_JDK)).toEqual(["api-memory"]);
   });
 
   it("counts a language-any family for every language, java included", () => {

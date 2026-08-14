@@ -78,6 +78,7 @@ function makeDebugGenerator(family: string, language: "python" | "javascript"): 
   return {
     family,
     axis: "debugging",
+    kind: "fix",
     language,
     tiers: [1, 2],
     generate(seed, tier) {
@@ -271,6 +272,7 @@ function makeJavaScanGenerator(family: string): ExerciseGenerator {
   return {
     family,
     axis: "debugging",
+    kind: "fix",
     language: "java",
     tiers: [1, 2],
     generate(seed, tier) {

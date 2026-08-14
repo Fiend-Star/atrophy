@@ -10,8 +10,8 @@ import { buildPayload, startServer } from "./serve.js";
 import { autoSync, isRegistered, maybePrintPublishHint, publishCommand } from "./publish.js";
 import { configPath, packDirs } from "./config.js";
 import { detectAssistants } from "../engine/guard.js";
-import { hasJdk, javacCommand, missingJdkHint } from "../engine/javatool.js";
-import { availableAxes, resolveExercise, selectExercise } from "../engine/select.js";
+import { javacCommand, missingJdkHint } from "../engine/javatool.js";
+import { availableAxes, hiddenByToolchain, resolveExercise, selectExercise } from "../engine/select.js";
 import { previewExercise, runDrill } from "../engine/session.js";
 import { computeStreak } from "../engine/streak.js";
 import { detectRegression, detectRegressions, type Regression } from "../engine/regression.js";
@@ -136,20 +136,27 @@ async function drillOnce(store: Store, flags: DrillFlags): Promise<boolean> {
       recentIds: recent,
       language,
     };
+    // Selection hides java drills a JVM would have to grade when there is no JDK. That
+    // must never be silent: it shrinks the pool the user is measured on, and when it
+    // empties the pool entirely "no exercises in the bank" would be a flat lie.
+    const hidden = hiddenByToolchain(pick);
     ex = selectExercise(pick);
     if (!ex) {
-      // Selection hides java content on a host with no JDK, so "no exercises yet" can be
-      // a lie: the drills are sitting right there, ungradable. Ask again as if the JDK
-      // were installed - if that finds one, the toolchain is the real answer.
-      if (!hasJdk() && selectExercise({ ...pick, toolchains: { jdk: true } })) {
+      if (hidden > 0) {
         console.error(
           pc.yellow(missingJdkHint(javacCommand())) +
-            pc.dim("\n  (java drills for this axis exist - run `atrophy doctor` for the full check)"),
+            pc.dim(`\n  (${hidden} java drill(s) for "${axis}" need it - run \`atrophy doctor\` for the full check)`),
         );
         return false;
       }
       console.error(pc.red(`no exercises in the bank for axis "${axis}"${flags.lang ? ` (${flags.lang})` : ""} yet`));
       return false;
+    }
+    if (hidden > 0) {
+      console.log(
+        pc.yellow(`note: ${hidden} java drill(s) for "${axis}" are hidden - no JDK found`) +
+          pc.dim(" (run `atrophy doctor`)"),
+      );
     }
   }
 

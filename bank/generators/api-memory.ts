@@ -378,6 +378,7 @@ function makeClozeGenerator(
   return {
     family,
     axis: "api-memory",
+    kind: "cloze",
     language,
     tiers,
     generate(seed, tier) {

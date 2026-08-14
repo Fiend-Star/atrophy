@@ -1,5 +1,5 @@
 import type { ExerciseGenerator } from "../bank/generators/types.js";
-import { AXES, type Axis, type Exercise, type Language } from "../bank/schema.js";
+import { AXES, spawnsJvm, type Axis, type Exercise, type Language } from "../bank/schema.js";
 import { hasJdk } from "./javatool.js";
 import { hexSeed, type Rng } from "./rng.js";
 import { expectedScore } from "./scoring.js";
@@ -69,15 +69,29 @@ function hostToolchains(): Toolchains {
 }
 
 /**
- * One offer rule for both entry points: the requested language must match ("any"
- * content matches every request), and the host must be able to grade it. Every java
- * kind spawns a JVM - predict-output included - so with no JDK each one grades as a
- * harnessError: noise in the queue, never evidence about the user. Python, JS and sql
- * have no toolchain to miss (sql rides the bundled better-sqlite3).
+ * What selection needs to know about a candidate before it exists: an exercise carries
+ * both fields, and a family declares them for every variant it renders.
  */
-function offerable(l: Language | "any", language: Language | undefined, toolchains: Toolchains): boolean {
-  const matchesLang = language === undefined || l === language || l === "any";
-  return matchesLang && (l !== "java" || toolchains.jdk);
+interface Candidate {
+  language: Language | "any";
+  kind: Exercise["kind"];
+}
+
+/**
+ * One offer rule for both entry points: the requested language must match ("any"
+ * content matches every request), and this host must be able to grade it.
+ *
+ * Only java drills whose grading starts a JVM need the JDK - write/fix/harness compile
+ * and run, predict-output goes through the source launcher. Without one, the first
+ * group grades as a harnessError and the second dies as a snippet-run error; either
+ * way the drill ends abandoned, recording nothing, so offering it only wastes the
+ * user's time. A java cloze is string-matched in-process and stays on offer, as does
+ * everything python, JS and sql (sql rides the bundled better-sqlite3).
+ */
+function offerable(c: Candidate, language: Language | undefined, toolchains: Toolchains): boolean {
+  const matchesLang = language === undefined || c.language === language || c.language === "any";
+  const needsJdk = c.language === "java" && spawnsJvm(c.kind);
+  return matchesLang && (!needsJdk || toolchains.jdk);
 }
 
 export interface SelectOptions {
@@ -111,7 +125,7 @@ export function selectExercise(opts: SelectOptions): Exercise | undefined {
     toolchains = hostToolchains(),
   } = opts;
   const recentFamilies = new Set(recentIds.map(familyOf));
-  const offer = (l: Language | "any") => offerable(l, language, toolchains);
+  const offer = (c: Candidate) => offerable(c, language, toolchains);
 
   const target = targetTier(rating);
   const tierOrder = [1, 2, 3].sort(
@@ -120,10 +134,10 @@ export function selectExercise(opts: SelectOptions): Exercise | undefined {
 
   for (const tier of tierOrder) {
     const staticPool = statics.filter(
-      (e) => e.axis === axis && e.tier === tier && offer(e.language),
+      (e) => e.axis === axis && e.tier === tier && offer(e),
     );
     const genPool = generators.filter(
-      (g) => g.axis === axis && g.tiers.includes(tier) && offer(g.language),
+      (g) => g.axis === axis && g.tiers.includes(tier) && offer(g),
     );
     const freshStatics = staticPool.filter((e) => !recentFamilies.has(familyOf(e.id)));
     const freshGens = genPool.filter((g) => !recentFamilies.has(g.family));
@@ -161,10 +175,25 @@ export function availableAxes(
   generators: ExerciseGenerator[] = [],
   toolchains: Toolchains = hostToolchains(),
 ): Axis[] {
-  const offer = (l: Language | "any") => offerable(l, language, toolchains);
+  const offer = (c: Candidate) => offerable(c, language, toolchains);
   return AXES.filter(
-    (axis) =>
-      bank.some((e) => e.axis === axis && offer(e.language)) ||
-      generators.some((g) => g.axis === axis && offer(g.language)),
+    (axis) => bank.some((e) => e.axis === axis && offer(e)) || generators.some((g) => g.axis === axis && offer(g)),
+  );
+}
+
+/**
+ * How many candidates for this axis the host's missing toolchains hid: drills that
+ * exist and match the request but cannot be graded here. The CLI prints this so a
+ * missing JDK never silently shrinks the pool a user is being measured on.
+ */
+export function hiddenByToolchain(
+  opts: Pick<SelectOptions, "statics" | "generators" | "axis" | "language" | "toolchains">,
+): number {
+  const { statics, generators = [], axis, language, toolchains = hostToolchains() } = opts;
+  const hidden = (c: Candidate) =>
+    offerable(c, language, { jdk: true }) && !offerable(c, language, toolchains);
+  return (
+    statics.filter((e) => e.axis === axis && hidden(e)).length +
+    generators.filter((g) => g.axis === axis && hidden(g)).length
   );
 }

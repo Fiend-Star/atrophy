@@ -266,6 +266,16 @@ export function isHarness(ex: Exercise): ex is HarnessExercise {
   return ex.kind === "write-harness" || ex.kind === "fix-harness";
 }
 
+/**
+ * Kinds whose grading starts a JVM - the compiled `JVM_KINDS` plus `predict-output`,
+ * which reaches one through the single-file source launcher instead. Paired with
+ * `language === "java"` this is the "needs a JDK" test: a java cloze is string-matched
+ * in-process and a java outline/recall never runs anything, so neither belongs here.
+ */
+export function spawnsJvm(kind: Exercise["kind"]): boolean {
+  return kind === "predict-output" || JVM_KINDS.some((k) => k === kind);
+}
+
 /** How many gradable units the exercise has (drives passed/total bookkeeping). */
 export function totalUnits(ex: Exercise): number {
   switch (ex.kind) {

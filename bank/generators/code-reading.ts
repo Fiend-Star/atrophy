@@ -39,6 +39,7 @@ function predictExercise(
 const pyAlias: ExerciseGenerator = {
   family: "cr-py-alias",
   axis: "code-reading",
+  kind: "predict-output",
   language: "python",
   tiers: [1, 2],
   generate(seed, tier) {
@@ -70,6 +71,7 @@ const pyAlias: ExerciseGenerator = {
 const pySlice: ExerciseGenerator = {
   family: "cr-py-slice",
   axis: "code-reading",
+  kind: "predict-output",
   language: "python",
   tiers: [1, 2],
   generate(seed, tier) {
@@ -91,6 +93,7 @@ const pySlice: ExerciseGenerator = {
 const jsRead: ExerciseGenerator = {
   family: "cr-js-gen",
   axis: "code-reading",
+  kind: "predict-output",
   language: "javascript",
   tiers: [1, 2, 3],
   generate(seed, tier) {
@@ -237,6 +240,7 @@ function mapSnippet(rng: Rng): { title: string; snippet: string } {
 const javaTrace: ExerciseGenerator = {
   family: "cr-java-trace",
   axis: "code-reading",
+  kind: "predict-output",
   language: "java",
   tiers: [1, 2],
   generate(seed, tier) {

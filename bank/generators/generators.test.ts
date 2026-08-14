@@ -7,21 +7,13 @@ import { gradeCloze } from "../../engine/cloze.js";
 import { grade, gradePrediction, solutionFileName } from "../../engine/grader.js";
 import { JAVA_COMPILE_TIMEOUT_MS, hasJdk, javacCommand } from "../../engine/javatool.js";
 import { run } from "../../engine/runner.js";
-import { JVM_KINDS, isCode, isHarness, type Axis, type ClozeExercise, type CodeExercise, type Exercise, type PredictExercise } from "../schema.js";
+import { isCode, isHarness, spawnsJvm, type Axis, type ClozeExercise, type CodeExercise, type Exercise, type PredictExercise } from "../schema.js";
 import { allGenerators } from "./index.js";
 
 const SEEDS = ["a1b2c3", "000000", "ffffff"];
 
 /** A wider spread, for families whose variant is itself an rng draw from a table. */
 const SEED_SPREAD = Array.from({ length: 24 }, (_, i) => (i * 0x1111).toString(16).padStart(6, "0"));
-
-/**
- * Same floor bank-integrity.test.ts puts on static java content: grading these kinds
- * pays javac + JVM cold start, which the schema's 10s default does not cover. Derived
- * from the schema's compiled-kind list exactly as the bank suite derives it, so this
- * cannot drift into a stale twin of the exported name.
- */
-const JVM_SPAWNING_KINDS = new Set<string>([...JVM_KINDS, "predict-output"]);
 
 /** Content hash of one rendered exercise, key order made irrelevant. */
 function renderHash(ex: Exercise): string {
@@ -47,20 +39,20 @@ function renderHash(ex: Exercise): string {
  * every session already recorded against that family no longer replays. Adding a family
  * means adding a row here (the coverage check below fails otherwise).
  */
-const PINNED = new Map<string, { axis: Axis; language: string; tiers: number[]; render: string }>([
-  ["sr-py-cond", { axis: "syntax-recall", language: "python", tiers: [1, 2], render: "f939f37a0c0ed6fb" }],
-  ["sr-js-cond", { axis: "syntax-recall", language: "javascript", tiers: [1, 2], render: "ee079c2ca7dfe1dd" }],
-  ["sr-java-cond", { axis: "syntax-recall", language: "java", tiers: [1, 2], render: "e44109ec658afeec" }],
-  ["dbg-py-agg", { axis: "debugging", language: "python", tiers: [1, 2], render: "ac1ea0232b7cc350" }],
-  ["dbg-js-agg", { axis: "debugging", language: "javascript", tiers: [1, 2], render: "fa6ce11e4a2e20f0" }],
-  ["dbg-java-scan", { axis: "debugging", language: "java", tiers: [1, 2], render: "b60eefd1fbd12130" }],
-  ["cr-py-alias", { axis: "code-reading", language: "python", tiers: [1, 2], render: "7e717e13a9c1d650" }],
-  ["cr-py-slice", { axis: "code-reading", language: "python", tiers: [1, 2], render: "9ac9d15e1c864b7f" }],
-  ["cr-js-gen", { axis: "code-reading", language: "javascript", tiers: [1, 2, 3], render: "73c911e9ec8e7da4" }],
-  ["cr-java-trace", { axis: "code-reading", language: "java", tiers: [1, 2], render: "9e28719ae7304c1c" }],
-  ["api-py-gen", { axis: "api-memory", language: "python", tiers: [1, 2, 3], render: "27674517a977e04a" }],
-  ["api-js-gen", { axis: "api-memory", language: "javascript", tiers: [1, 2, 3], render: "25c803c487a80fd9" }],
-  ["api-java-blank", { axis: "api-memory", language: "java", tiers: [1, 2], render: "91c234d03930ff16" }],
+const PINNED = new Map<string, { axis: Axis; kind: Exercise["kind"]; language: string; tiers: number[]; render: string }>([
+  ["sr-py-cond", { axis: "syntax-recall", kind: "write", language: "python", tiers: [1, 2], render: "f939f37a0c0ed6fb" }],
+  ["sr-js-cond", { axis: "syntax-recall", kind: "write", language: "javascript", tiers: [1, 2], render: "ee079c2ca7dfe1dd" }],
+  ["sr-java-cond", { axis: "syntax-recall", kind: "write", language: "java", tiers: [1, 2], render: "e44109ec658afeec" }],
+  ["dbg-py-agg", { axis: "debugging", kind: "fix", language: "python", tiers: [1, 2], render: "ac1ea0232b7cc350" }],
+  ["dbg-js-agg", { axis: "debugging", kind: "fix", language: "javascript", tiers: [1, 2], render: "fa6ce11e4a2e20f0" }],
+  ["dbg-java-scan", { axis: "debugging", kind: "fix", language: "java", tiers: [1, 2], render: "b60eefd1fbd12130" }],
+  ["cr-py-alias", { axis: "code-reading", kind: "predict-output", language: "python", tiers: [1, 2], render: "7e717e13a9c1d650" }],
+  ["cr-py-slice", { axis: "code-reading", kind: "predict-output", language: "python", tiers: [1, 2], render: "9ac9d15e1c864b7f" }],
+  ["cr-js-gen", { axis: "code-reading", kind: "predict-output", language: "javascript", tiers: [1, 2, 3], render: "73c911e9ec8e7da4" }],
+  ["cr-java-trace", { axis: "code-reading", kind: "predict-output", language: "java", tiers: [1, 2], render: "9e28719ae7304c1c" }],
+  ["api-py-gen", { axis: "api-memory", kind: "cloze", language: "python", tiers: [1, 2, 3], render: "27674517a977e04a" }],
+  ["api-js-gen", { axis: "api-memory", kind: "cloze", language: "javascript", tiers: [1, 2, 3], render: "25c803c487a80fd9" }],
+  ["api-java-blank", { axis: "api-memory", kind: "cloze", language: "java", tiers: [1, 2], render: "91c234d03930ff16" }],
 ]);
 
 const dirs: string[] = [];
@@ -92,7 +84,11 @@ describe("generator contracts", () => {
           expect(a.tier).toBe(tier);
           expect(a.axis).toBe(g.axis);
           expect(a.language).toBe(g.language);
-          if (a.language === "java" && JVM_SPAWNING_KINDS.has(a.kind)) {
+          // Selection filters families by their *declared* kind, before any variant
+          // exists - a family that renders something else would be offered on a host
+          // that cannot grade it (or hidden on one that can).
+          expect(a.kind, `${g.family} t${tier} ${seed} renders a kind it does not declare`).toBe(g.kind);
+          if (a.language === "java" && spawnsJvm(a.kind)) {
             expect(a.testTimeoutMs, `${g.family} tier ${tier}`).toBeGreaterThanOrEqual(20_000);
             // Same tier-3 harness clause bank-integrity puts on static java content:
             // the exercise's own checks run on top of compile + startup, and the
@@ -117,9 +113,24 @@ describe("generator contracts", () => {
       // Concrete, never "any": the widening in bank/generators/types.ts opened that door
       // for future families and must not have walked an existing one through it.
       expect(g.language, family).toBe(pin.language);
+      expect(g.kind, family).toBe(pin.kind);
       expect([...g.tiers], family).toEqual(pin.tiers);
       const ex = g.generate("a1b2c3", g.tiers[0]!);
       expect(renderHash(ex), `${family}: rendered output drifted - recorded sessions no longer replay`).toBe(pin.render);
+    }
+  });
+
+  it("every family renders exactly the one kind it declares, on every seed and tier", () => {
+    // The declared kind is a promise selection relies on without ever generating: a
+    // family that renders a second kind would put a JVM-graded variant in front of a
+    // user with no JDK (or hide a cloze from one who has none). A wide seed spread,
+    // because which variant a family draws is itself an rng roll.
+    for (const g of allGenerators) {
+      for (const tier of g.tiers) {
+        for (const seed of [...SEEDS, ...SEED_SPREAD]) {
+          expect(g.generate(seed, tier).kind, `${g.family} t${tier} ${seed}`).toBe(g.kind);
+        }
+      }
     }
   });
 
