@@ -83,10 +83,10 @@ interface Candidate {
  *
  * Only java drills whose grading starts a JVM need the JDK - write/fix/harness compile
  * and run, predict-output goes through the source launcher. Without one, the first
- * group grades as a harnessError and the second dies as a snippet-run error; either
- * way the drill ends abandoned, recording nothing, so offering it only wastes the
- * user's time. A java cloze is string-matched in-process and stays on offer, as does
- * everything python, JS and sql (sql rides the bundled better-sqlite3).
+ * group grades as a harnessError and the second dies as a snippet-run error; neither
+ * records anything, so offering the drill only wastes the user's time. A java cloze is
+ * string-matched in-process and stays on offer, as does everything python, JS and sql
+ * (sql rides the bundled better-sqlite3).
  */
 function offerable(c: Candidate, language: Language | undefined, toolchains: Toolchains): boolean {
   const matchesLang = language === undefined || c.language === language || c.language === "any";

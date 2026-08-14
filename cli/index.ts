@@ -23,7 +23,7 @@ import {
   type RatingState,
 } from "../engine/scoring.js";
 import { Store, defaultDbPath } from "../store/db.js";
-import { runDoctor } from "./doctor.js";
+import { hiddenJavaNotice, runDoctor } from "./doctor.js";
 import { reportCommand } from "./report.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -136,9 +136,10 @@ async function drillOnce(store: Store, flags: DrillFlags): Promise<boolean> {
       recentIds: recent,
       language,
     };
-    // Selection hides java drills a JVM would have to grade when there is no JDK. That
-    // must never be silent: it shrinks the pool the user is measured on, and when it
-    // empties the pool entirely "no exercises in the bank" would be a flat lie.
+    // Selection hides java drills a JVM would have to grade when there is no JDK. For
+    // the user who asked for java that must never be silent: it shrinks the pool they
+    // are measured on, and when it empties the pool entirely "no exercises in the bank"
+    // would be a flat lie. (`hiddenJavaNotice` owns who hears which of the two.)
     const hidden = hiddenByToolchain(pick);
     ex = selectExercise(pick);
     if (!ex) {
@@ -152,12 +153,8 @@ async function drillOnce(store: Store, flags: DrillFlags): Promise<boolean> {
       console.error(pc.red(`no exercises in the bank for axis "${axis}"${flags.lang ? ` (${flags.lang})` : ""} yet`));
       return false;
     }
-    if (hidden > 0) {
-      console.log(
-        pc.yellow(`note: ${hidden} java drill(s) for "${axis}" are hidden - no JDK found`) +
-          pc.dim(" (run `atrophy doctor`)"),
-      );
-    }
+    const notice = hiddenJavaNotice(hidden, axis, language);
+    if (notice) console.log(pc.yellow(notice));
   }
 
   // Preview only: print the exercise and stop, nothing recorded.

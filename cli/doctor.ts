@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pc from "picocolors";
-import { loadBank, type CodeExercise } from "../bank/schema.js";
+import { loadBank, type Axis, type CodeExercise, type Language } from "../bank/schema.js";
 import { grade, pythonCommand, solutionFileName } from "../engine/grader.js";
 import { MIN_JDK_MAJOR, javacCommand, missingJdkHint, parseJavaMajor } from "../engine/javatool.js";
 import { Store } from "../store/db.js";
@@ -125,6 +125,21 @@ export function checkJava(): CheckResult {
     /* fall through to warn */
   }
   return { name: "Java (JDK)", status: "warn", detail: missingJdkHint(cmd) };
+}
+
+/**
+ * The line a drill prints when a missing JDK shrank the pool it drew from - or null
+ * when this user should not hear it. Only a `--lang java` request should: for a python
+ * or JS drill, hidden java content is noise about drills the user never asked for, and
+ * a JDK-less host would repeat it on every single drill.
+ *
+ * An *empty* pool is a different message with a different rule: `drillOnce` reports
+ * that one whatever the language, because "no exercises in the bank" would be a lie
+ * when the drills are there and only ungradable.
+ */
+export function hiddenJavaNotice(hidden: number, axis: Axis, language?: Language): string | null {
+  if (hidden <= 0 || language !== "java") return null;
+  return `note: ${hidden} java drill(s) for "${axis}" are hidden - no JDK found (run \`atrophy doctor\`)`;
 }
 
 /** SQLite's own version, from a real query - which also proves the native addon loaded. */

@@ -11,6 +11,7 @@ import {
   checkNode,
   checkPacks,
   checkSql,
+  hiddenJavaNotice,
   javaCheckResult,
 } from "./doctor.js";
 
@@ -160,6 +161,27 @@ describe("checkJava", () => {
     expect(r.name).toBe("Java (JDK)");
     expect(["pass", "warn"]).toContain(r.status);
     if (r.status === "warn") expect(r.detail).toMatch(/JDK|ATROPHY_JAVA_HOME/);
+  });
+});
+
+describe("hiddenJavaNotice", () => {
+  it("tells a --lang java user how much of the pool the missing JDK took", () => {
+    const notice = hiddenJavaNotice(4, "syntax-recall", "java");
+    expect(notice).toContain("4 java drill(s)");
+    expect(notice).toContain("syntax-recall");
+    expect(notice).toContain("doctor");
+  });
+
+  it("says nothing to a user who never asked for java", () => {
+    // The drill still runs (python/js content is unaffected); mentioning hidden java
+    // would be noise about drills this user never requested. An *empty* pool is a
+    // different message, and drillOnce prints that one whatever the language.
+    expect(hiddenJavaNotice(4, "syntax-recall", undefined)).toBeNull();
+    expect(hiddenJavaNotice(4, "syntax-recall", "python")).toBeNull();
+  });
+
+  it("says nothing when the toolchain hid nothing", () => {
+    expect(hiddenJavaNotice(0, "syntax-recall", "java")).toBeNull();
   });
 });
 
