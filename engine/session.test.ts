@@ -166,8 +166,11 @@ describe("runDrill - whiteboard mode (submitPolicy: single)", () => {
       );
       expect(output).toContain("Your code did not run");
       expect(output).not.toContain("whiteboard mode");
-      // Reaching a retry prompt at all is the proof the submission was not consumed.
-      expect(prompts).toContain("fix & resubmit");
+      // Being asked to submit a third time is the proof the submission was not consumed
+      // (two answers went in before the failed grade). It is the plain submit prompt, not
+      // the retry one: a run that graded nothing leaves nothing to stop on either.
+      expect(prompts.split("[Enter] submit").length - 1).toBeGreaterThanOrEqual(3);
+      expect(prompts).not.toContain("stop here");
       expect(outcome.abandoned).toBe(true);
     } finally {
       if (previous === undefined) delete process.env.ATROPHY_JAVA_HOME;
@@ -186,6 +189,31 @@ describe("runDrill - whiteboard mode (submitPolicy: single)", () => {
 });
 
 // Deliberately outside the JDK gate: the point is what happens when there is no JDK.
+describe("runDrill - interactive when grading never ran", () => {
+  it("offers no way to stop on a harnessError, so 's' cannot record a 0/n", async () => {
+    // The rating-integrity leg of the same invariant the --solution test below pins.
+    // "s" ends the drill at the last graded result, and drillOnce records that outcome -
+    // so if a harnessError enabled it, a missing JDK would move the unaided rating.
+    const previous = process.env.ATROPHY_JAVA_HOME;
+    process.env.ATROPHY_JAVA_HOME = join(tmpdir(), "atrophy-no-such-jdk-home");
+    try {
+      // "" trips the unchanged-file guard, "" grades (and fails to run), then "s", then "q".
+      const { outcome, output, prompts } = await driveDrill(harnessEx, ["", "", "s", "q"]);
+      expect(prompts).not.toContain("stop here");
+      expect(outcome.abandoned).toBe(true);
+      expect(outcome.passed).toBe(0);
+      expect(outcome.score).toBe(0);
+      expect(output).toContain("Your code did not run");
+      // Nor is a score reported for a run that produced no checks: "0/1 tests passed"
+      // reads as a verdict on the user, and there was no verdict to give.
+      expect(output).not.toContain("tests passed");
+    } finally {
+      if (previous === undefined) delete process.env.ATROPHY_JAVA_HOME;
+      else process.env.ATROPHY_JAVA_HOME = previous;
+    }
+  }, 30_000);
+});
+
 describe("runDrill - --solution when grading never ran", () => {
   it("abandons instead of scoring a 0 the user did not earn", async () => {
     const previous = process.env.ATROPHY_JAVA_HOME;

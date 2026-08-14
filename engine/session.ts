@@ -322,13 +322,19 @@ async function codeDrill(ex: CodeLikeExercise, solutionOverride?: string): Promi
         }
 
         const result = await grade(ex, dir);
-        const passed = result.harnessError ? 0 : result.passed;
+        // A harnessError is never drill evidence: a missing JDK, a broken install, a
+        // javac error or a bad exercise fixture produced no graded checks. So it does
+        // not burn a single-submission drill, is not reported as a score (0/n would read
+        // as a verdict on the user), and - crucially - does not arm "s", which ends the
+        // drill at the last result and lets drillOnce record it. The loop just stays open.
+        if (result.harnessError) {
+          printFailures(result);
+          continue;
+        }
+        const passed = result.passed;
         // Whiteboard mode: one graded submission, no fix-and-resubmit loop.
         // submitPolicy has no schema default, so "not single" is the loop, not "loop".
-        // A harnessError is never drill evidence though - a missing JDK, a broken
-        // install or a javac error produced no graded checks, so it must not burn
-        // the single submission. Those fall through and stay interactive.
-        if (ex.submitPolicy === "single" && !result.harnessError) {
+        if (ex.submitPolicy === "single") {
           if (passed === result.total) {
             console.log(pc.green(`\n✓ ${passed}/${result.total} tests passed`) + pc.dim(` in ${Math.round(elapsed())}s`));
           } else {
