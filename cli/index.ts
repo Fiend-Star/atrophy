@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import pc from "picocolors";
 import { allGenerators } from "../bank/generators/index.js";
 import { AXES, LANGUAGES, loadBank, type Axis, type Exercise, type Language } from "../bank/schema.js";
@@ -97,7 +97,7 @@ function dueAxis(store: Store, bank: Exercise[], language?: Language): Axis {
   return best;
 }
 
-async function drillOnce(
+export async function drillOnce(
   store: Store,
   flags: DrillFlags,
   opts: { languageMix?: boolean } = {},
@@ -339,7 +339,7 @@ function exportJson(store: Store, out?: string): void {
   }
 }
 
-async function baseline(store: Store, flags: DrillFlags): Promise<void> {
+export async function baseline(store: Store, flags: DrillFlags): Promise<void> {
   const bank = loadBank(bankDirs());
   const language = flags.lang ? parseLang(flags.lang) : undefined;
   const axesWithExercises = availableAxes(bank, language, allGenerators);
@@ -367,181 +367,240 @@ function cliVersion(): string {
   return "unknown";
 }
 
-const program = new Command();
-program
-  .name("atrophy")
-  .description("Measure what your brain is losing while AI does your work.")
-  .version(cliVersion());
+// --- command actions -------------------------------------------------------
+// One exported function per command, so tests can drive a command's real body
+// without spawning a process (spec E2).
 
-program
-  .command("drill")
-  .description("run one unaided micro-drill (5-10 min)")
-  .option("-a, --axis <axis>", `skill axis: ${AXES.join(", ")}`)
-  .option("-l, --lang <language>", `one of: ${LANGUAGES.join(", ")}`)
-  .option("--ai-on", "monthly comparison rep WITH your AI tools (plots the gap, never touches your unaided rating)")
-  .option("--solution <file>", "non-interactive: grade this file as the submission (scripting/tests)")
-  .option("--exercise <id>", "replay a specific exercise (bank id or generated family-seed id)")
-  .option("--tier <n>", "tier 1-3 for a generated --exercise not in your history")
-  .option("--show", "print the exercise without grading (preview)")
-  .action(async (flags: DrillFlags) => {
-    const store = new Store();
-    try {
-      const ok = await drillOnce(store, flags);
-      if (!ok) process.exitCode = 1;
-    } finally {
-      store.close();
+export async function drillAction(flags: DrillFlags): Promise<void> {
+  const store = new Store();
+  try {
+    const ok = await drillOnce(store, flags);
+    if (!ok) process.exitCode = 1;
+  } finally {
+    store.close();
+  }
+}
+
+export async function baselineAction(flags: DrillFlags): Promise<void> {
+  const store = new Store();
+  try {
+    await baseline(store, flags);
+  } finally {
+    store.close();
+  }
+}
+
+export function statsAction(): void {
+  const store = new Store();
+  try {
+    stats(store);
+  } finally {
+    store.close();
+  }
+}
+
+export async function serveAction(flags: { port: string }): Promise<void> {
+  const store = new Store();
+  const port = Number.parseInt(flags.port, 10);
+  await startServer(store, dashboardHtmlPath(), port);
+  console.log(pc.bold("\n  Atrophy dashboard: ") + pc.cyan(`http://127.0.0.1:${port}`));
+  console.log(pc.dim("  Ctrl+C to stop. Data refreshes from SQLite on every reload.\n"));
+}
+
+export async function publishAction(flags: { handle?: string; url?: string; stop?: boolean }): Promise<void> {
+  const store = new Store();
+  try {
+    await publishCommand(store, flags);
+  } finally {
+    store.close();
+  }
+}
+
+export function exportAction(flags: { out?: string }): void {
+  const store = new Store();
+  try {
+    exportJson(store, flags.out);
+  } finally {
+    store.close();
+  }
+}
+
+export async function doctorAction(): Promise<void> {
+  // Everything the doctor reports on can itself be broken, including the
+  // config it reads - resolve each input defensively so the report prints.
+  let bankDir: string[] | null = null;
+  let bankError: string | null = null;
+  try {
+    bankDir = bankDirs();
+  } catch (err) {
+    bankError = (err as Error).message;
+  }
+  let packs: string[] = [];
+  try {
+    packs = packDirs();
+  } catch {
+    /* whatever broke here already surfaced as bankError */
+  }
+  process.exitCode = await runDoctor({ bankDir, bankError, packDirs: packs, dbPath: defaultDbPath() });
+}
+
+export async function backupAction(flags: { out?: string }): Promise<void> {
+  const store = new Store();
+  try {
+    const dest = flags.out ?? defaultBackupPath();
+    mkdirSync(dirname(dest), { recursive: true });
+    await store.backupTo(dest);
+    console.log(pc.green(`backed up to ${dest}`));
+  } catch (err) {
+    console.error(pc.red(`backup failed: ${(err as Error).message}`));
+    process.exitCode = 1;
+  } finally {
+    store.close();
+  }
+}
+
+export async function resetAction(flags: { yes?: boolean }): Promise<void> {
+  const store = new Store();
+  try {
+    if (!flags.yes) {
+      console.log(
+        pc.yellow("This erases every rating and session.") +
+          pc.dim(" A backup is saved first. Re-run with ") +
+          pc.cyan("--yes") +
+          pc.dim(" to proceed."),
+      );
+      return;
     }
-  });
+    const dest = defaultBackupPath();
+    mkdirSync(dirname(dest), { recursive: true });
+    await store.backupTo(dest);
+    store.clear();
+    console.log(pc.green("all drill data erased.") + pc.dim(` backup saved to ${dest}`));
+  } catch (err) {
+    console.error(pc.red(`reset failed: ${(err as Error).message}`));
+    process.exitCode = 1;
+  } finally {
+    store.close();
+  }
+}
 
-program
-  .command("baseline")
-  .description("initial ~25 min session: one drill per axis, AI off")
-  .option("-l, --lang <language>", `one of: ${LANGUAGES.join(", ")}`)
-  .action(async (flags: DrillFlags) => {
-    const store = new Store();
-    try {
-      await baseline(store, flags);
-    } finally {
-      store.close();
-    }
-  });
+export function reportAction(flags: { out?: string }): void {
+  const store = new Store();
+  try {
+    reportCommand(store, flags);
+  } finally {
+    store.close();
+  }
+}
 
-program
-  .command("stats")
-  .description("per-axis ratings, confidence decay, and recency")
-  .action(() => {
-    const store = new Store();
-    try {
-      stats(store);
-    } finally {
-      store.close();
-    }
-  });
+// --- entry point -----------------------------------------------------------
 
-program
-  .command("serve")
-  .description("serve the decay dashboard locally (reads live data on refresh)")
-  .option("-p, --port <port>", "port on 127.0.0.1", "4646")
-  .action(async (flags: { port: string }) => {
-    const store = new Store();
-    const port = Number.parseInt(flags.port, 10);
-    await startServer(store, dashboardHtmlPath(), port);
-    console.log(pc.bold("\n  Atrophy dashboard: ") + pc.cyan(`http://127.0.0.1:${port}`));
-    console.log(pc.dim("  Ctrl+C to stop. Data refreshes from SQLite on every reload.\n"));
-  });
+/** The whole command surface. Building it is free of side effects; parsing is not. */
+export function buildProgram(): Command {
+  const program = new Command();
+  program
+    .name("atrophy")
+    .description("Measure what your brain is losing while AI does your work.")
+    .version(cliVersion());
 
-program
-  .command("publish")
-  .description("opt in to the public leaderboard; afterwards every drill auto-syncs")
-  .option("--handle <name>", "public handle (3-20 chars; saved after first publish)")
-  .option("--url <url>", "leaderboard API override")
-  .option("--stop", "stop auto-syncing (your entry stays until you ask for deletion)")
-  .action(async (flags: { handle?: string; url?: string; stop?: boolean }) => {
-    const store = new Store();
-    try {
-      await publishCommand(store, flags);
-    } finally {
-      store.close();
-    }
-  });
+  program
+    .command("drill")
+    .description("run one unaided micro-drill (5-10 min)")
+    .option("-a, --axis <axis>", `skill axis: ${AXES.join(", ")}`)
+    .option("-l, --lang <language>", `one of: ${LANGUAGES.join(", ")}`)
+    .option("--ai-on", "monthly comparison rep WITH your AI tools (plots the gap, never touches your unaided rating)")
+    .option("--solution <file>", "non-interactive: grade this file as the submission (scripting/tests)")
+    .option("--exercise <id>", "replay a specific exercise (bank id or generated family-seed id)")
+    .option("--tier <n>", "tier 1-3 for a generated --exercise not in your history")
+    .option("--show", "print the exercise without grading (preview)")
+    .action(drillAction);
 
-program
-  .command("export")
-  .description("dump ratings + sessions as JSON (feeds the dashboard)")
-  .option("-o, --out <file>", "write to file instead of stdout")
-  .action((flags: { out?: string }) => {
-    const store = new Store();
-    try {
-      exportJson(store, flags.out);
-    } finally {
-      store.close();
-    }
-  });
+  program
+    .command("baseline")
+    .description("initial ~25 min session: one drill per axis, AI off")
+    .option("-l, --lang <language>", `one of: ${LANGUAGES.join(", ")}`)
+    .action(baselineAction);
 
-program
-  .command("doctor")
-  .description("diagnose your setup: runtime, editor, sandbox, exercise bank, database")
-  .action(async () => {
-    // Everything the doctor reports on can itself be broken, including the
-    // config it reads - resolve each input defensively so the report prints.
-    let bankDir: string[] | null = null;
-    let bankError: string | null = null;
-    try {
-      bankDir = bankDirs();
-    } catch (err) {
-      bankError = (err as Error).message;
-    }
-    let packs: string[] = [];
-    try {
-      packs = packDirs();
-    } catch {
-      /* whatever broke here already surfaced as bankError */
-    }
-    process.exitCode = await runDoctor({ bankDir, bankError, packDirs: packs, dbPath: defaultDbPath() });
-  });
+  program
+    .command("stats")
+    .description("per-axis ratings, confidence decay, and recency")
+    .action(statsAction);
 
-program
-  .command("backup")
-  .description("copy your SQLite database to a backup file you own")
-  .option("-o, --out <file>", "destination path (default: ~/.atrophy/backups/)")
-  .action(async (flags: { out?: string }) => {
-    const store = new Store();
-    try {
-      const dest = flags.out ?? defaultBackupPath();
-      mkdirSync(dirname(dest), { recursive: true });
-      await store.backupTo(dest);
-      console.log(pc.green(`backed up to ${dest}`));
-    } catch (err) {
-      console.error(pc.red(`backup failed: ${(err as Error).message}`));
-      process.exitCode = 1;
-    } finally {
-      store.close();
-    }
-  });
+  program
+    .command("serve")
+    .description("serve the decay dashboard locally (reads live data on refresh)")
+    .option("-p, --port <port>", "port on 127.0.0.1", "4646")
+    .action(serveAction);
 
-program
-  .command("reset")
-  .description("erase all your drill data (a backup is written first)")
-  .option("--yes", "confirm the erase (nothing happens without this)")
-  .action(async (flags: { yes?: boolean }) => {
-    const store = new Store();
-    try {
-      if (!flags.yes) {
-        console.log(
-          pc.yellow("This erases every rating and session.") +
-            pc.dim(" A backup is saved first. Re-run with ") +
-            pc.cyan("--yes") +
-            pc.dim(" to proceed."),
-        );
-        return;
-      }
-      const dest = defaultBackupPath();
-      mkdirSync(dirname(dest), { recursive: true });
-      await store.backupTo(dest);
-      store.clear();
-      console.log(pc.green("all drill data erased.") + pc.dim(` backup saved to ${dest}`));
-    } catch (err) {
-      console.error(pc.red(`reset failed: ${(err as Error).message}`));
-      process.exitCode = 1;
-    } finally {
-      store.close();
-    }
-  });
+  program
+    .command("publish")
+    .description("opt in to the public leaderboard; afterwards every drill auto-syncs")
+    .option("--handle <name>", "public handle (3-20 chars; saved after first publish)")
+    .option("--url <url>", "leaderboard API override")
+    .option("--stop", "stop auto-syncing (your entry stays until you ask for deletion)")
+    .action(publishAction);
 
-program
-  .command("report")
-  .description("a shareable summary of your baseline (Markdown, or an SVG card with --out *.svg)")
-  .option("-o, --out <file>", "write to a file (.svg renders a card, otherwise Markdown)")
-  .action((flags: { out?: string }) => {
-    const store = new Store();
-    try {
-      reportCommand(store, flags);
-    } finally {
-      store.close();
-    }
-  });
+  program
+    .command("export")
+    .description("dump ratings + sessions as JSON (feeds the dashboard)")
+    .option("-o, --out <file>", "write to file instead of stdout")
+    .action(exportAction);
 
-program.parseAsync().catch((err) => {
-  console.error(pc.red(String(err instanceof Error ? err.message : err)));
-  process.exit(1);
-});
+  program
+    .command("doctor")
+    .description("diagnose your setup: runtime, editor, sandbox, exercise bank, database")
+    .action(doctorAction);
+
+  program
+    .command("backup")
+    .description("copy your SQLite database to a backup file you own")
+    .option("-o, --out <file>", "destination path (default: ~/.atrophy/backups/)")
+    .action(backupAction);
+
+  program
+    .command("reset")
+    .description("erase all your drill data (a backup is written first)")
+    .option("--yes", "confirm the erase (nothing happens without this)")
+    .action(resetAction);
+
+  program
+    .command("report")
+    .description("a shareable summary of your baseline (Markdown, or an SVG card with --out *.svg)")
+    .option("-o, --out <file>", "write to a file (.svg renders a card, otherwise Markdown)")
+    .action(reportAction);
+
+  return program;
+}
+
+/** Parse argv and run the matching command (defaults to `process.argv`). */
+export async function runCli(argv?: readonly string[]): Promise<void> {
+  await buildProgram().parseAsync(argv);
+}
+
+/**
+ * True only when this module is what node was told to run - `atrophy …`,
+ * `node dist/cli/index.js …` or `tsx cli/index.ts …`. Importing the module
+ * (tests, other tooling) must never parse argv. Both sides become a `file://`
+ * URL so Windows separators cannot differ; `argv[1]` is compared resolved
+ * (node reports the realpath of a symlinked bin - npm's shim, a linked
+ * checkout - as `import.meta.url`) and raw (under `--preserve-symlinks-main`
+ * it reports the link itself). Failing this check means the CLI does nothing
+ * at all, so it errs toward matching.
+ */
+function isProcessEntry(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    if (import.meta.url === pathToFileURL(entry).href) return true;
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
+  } catch {
+    return false; // entry gone or unreadable: treat as "not us"
+  }
+}
+
+if (isProcessEntry()) {
+  runCli().catch((err) => {
+    console.error(pc.red(String(err instanceof Error ? err.message : err)));
+    process.exit(1);
+  });
+}
