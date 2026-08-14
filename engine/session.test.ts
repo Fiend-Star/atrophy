@@ -418,6 +418,25 @@ describe("runDrill - recall", () => {
     expect(outcome.passed).toBe(1);
     expect(lines.join("\n")).toContain("✓ correct");
   });
+
+  it("keeps the indent of a reveal that opens with a table row", async () => {
+    // Reveals are how the recall drills teach the rest of their table, and a table
+    // usually starts on line one. Trimming the whole string would strip that first row's
+    // indent alone, printing it shifted left under rows that kept theirs.
+    const tableReveal = {
+      ...recallEx,
+      reveal: "  OU   old-gen used\n  OC   old-gen capacity\n",
+    };
+    const { lines, restore } = captureLog();
+    try {
+      await runDrill(tableReveal, solutionFile("0.25\n"));
+    } finally {
+      restore();
+    }
+    const output = lines.join("\n");
+    expect(output).toContain("  OU   old-gen used");
+    expect(output).toContain("  OC   old-gen capacity");
+  });
 });
 
 const clozeEx: ClozeExercise = {

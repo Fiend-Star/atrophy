@@ -468,7 +468,10 @@ async function recallDrill(ex: RecallExercise, solutionOverride?: string): Promi
     else console.log(pc.red("\n✗ nope.") + ` Accepted: ${ex.acceptedAnswers.join(" | ")}`);
     // The reveal is the teaching moment, so it follows both outcomes - but only after
     // an answer: abandoning returns above, without being handed the derivation.
-    if (ex.reveal) console.log(pc.dim(`\n${ex.reveal.trim()}`));
+    // trimEnd, not trim: a reveal that opens with an indented table row keeps that indent.
+    // Leading whitespace is only ever the first line's, and stripping it shifts that one
+    // row left while every row below it stays put.
+    if (ex.reveal) console.log(pc.dim(`\n${ex.reveal.trimEnd()}`));
     return makeOutcome(ex, correct ? 1 : 0, elapsed());
   };
 
