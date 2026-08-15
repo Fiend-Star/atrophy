@@ -219,12 +219,12 @@ drills use `"kind": "write-harness"` or `"fix-harness"` and ship their own
 line - plus `totalChecks`, the number of checks that harness must report.
 CI compiles every Java starter and holds the harness to that count.
 
-SQL exercises (`"language": "sql"`) carry `cases` instead of `tests`: each
-case is a `fixture` of `CREATE`/`INSERT` statements plus the `expectedRows`
-the answer must return. CI applies every fixture twice to prove it builds the
-same database both times, and it synthesizes the hardcoded-literal answer for
-each exercise and requires that it fail at least one case - a question one
-literal could answer cannot merge.
+SQL write exercises (`"language": "sql"`, `"kind": "write"`) carry `cases`
+instead of `tests`: each case is a `fixture` of `CREATE`/`INSERT` statements
+plus the `expectedRows` the answer must return. CI applies every fixture
+twice to prove it builds the same database both times, and for each such
+exercise it synthesizes the hardcoded-literal answer and requires that it
+fail at least one case - a question one literal could answer cannot merge.
 
 Roadmap: LLM-judged decomposition drills, more languages, spaced-repetition
 scheduling (FSRS), per-axis leaderboards. More to be added soon.

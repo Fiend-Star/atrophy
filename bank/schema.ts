@@ -176,9 +176,10 @@ const exerciseUnion = z.discriminatedUnion("kind", [
 
 /**
  * Cross-field rules the discriminated union cannot state on its own. Only a sql write
- * carries `cases`; every other write/fix carries `tests` + `functionName`. sql exists
- * as a language for that one kind: there is nothing to "fix" in a query the user never
- * wrote, and a query has no stdout to predict. A cloze's per-blank answers are the
+ * carries `cases`; every other write/fix carries `tests` + `functionName`. Among the
+ * *graded-code* kinds sql is write-only: there is nothing to "fix" in a query the user
+ * never wrote, and a query has no stdout to predict - a sql `recall` question needs
+ * neither and sits outside this refinement entirely. A cloze's per-blank answers are the
  * other such rule: their count only means something against the snippet.
  */
 const refinedUnion = exerciseUnion.superRefine((ex, ctx) => {

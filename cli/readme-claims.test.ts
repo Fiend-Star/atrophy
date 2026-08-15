@@ -63,8 +63,9 @@ const EXPECTED_AXES_BY_LANG: Record<Language, Axis[]> = {
 };
 
 /**
- * mirrors README's "Java ships on every skill" sentence, just after the table — update
- * BOTH together.
+ * mirrors README's "Java ships on every skill - N static exercises plus M generator
+ * families" sentence, just after the table — update BOTH together. "Every skill" is
+ * pinned separately below (the counts alone don't prove per-axis coverage).
  */
 const EXPECTED_JAVA_STATIC_COUNT = 22;
 const EXPECTED_JAVA_GENERATOR_FAMILY_COUNT = 4;
@@ -85,7 +86,7 @@ describe("README claims vs. measured selection behavior", () => {
     }
   });
 
-  it("§'How it works' SQL paragraph: axes carrying language:\"sql\" content", () => {
+  it("§'The five skills' SQL paragraph: axes carrying language:\"sql\" content", () => {
     const measured = AXES.filter(
       (axis) =>
         bank.some((e) => e.axis === axis && e.language === "sql") ||
@@ -93,7 +94,7 @@ describe("README claims vs. measured selection behavior", () => {
     );
     expect(
       measured,
-      "README.md §'How it works' SQL paragraph is out of date (a language:\"sql\" exercise landed on a new axis)",
+      "README.md §'The five skills' SQL paragraph is out of date (a language:\"sql\" exercise landed on a new axis)",
     ).toEqual(EXPECTED_SQL_LANGUAGE_AXES);
   });
 
@@ -106,16 +107,28 @@ describe("README claims vs. measured selection behavior", () => {
     }
   });
 
-  it("§'How it works' Java paragraph: static exercise and generator family counts", () => {
+  it("§'The five skills' Java paragraph: static exercise and generator family counts", () => {
     const javaStatics = bank.filter((e) => e.language === "java").length;
     const javaGenFamilies = allGenerators.filter((g) => g.language === "java").length;
     expect(
       javaStatics,
-      "README.md §'How it works' Java paragraph static exercise count is out of date",
+      "README.md §'The five skills' Java paragraph static exercise count is out of date",
     ).toBe(EXPECTED_JAVA_STATIC_COUNT);
     expect(
       javaGenFamilies,
-      "README.md §'How it works' Java paragraph generator family count is out of date",
+      "README.md §'The five skills' Java paragraph generator family count is out of date",
     ).toBe(EXPECTED_JAVA_GENERATOR_FAMILY_COUNT);
+  });
+
+  it("§'The five skills' Java paragraph: \"ships on every skill\" covers every axis", () => {
+    // The counts above can hold steady while java content quietly drains off one axis -
+    // this is the assertion that actually pins "every skill", which EXPECTED_AXES_BY_LANG.java
+    // cannot: any-tagged content (dec-any-*, api-any-*) makes every axis reachable under
+    // --lang java regardless of whether a java-tagged exercise exists there at all.
+    const javaAxes = AXES.filter((axis) => bank.some((e) => e.axis === axis && e.language === "java"));
+    expect(
+      javaAxes,
+      "README.md §'The five skills' Java paragraph: \"ships on every skill\" is out of date",
+    ).toEqual([...AXES]);
   });
 });
