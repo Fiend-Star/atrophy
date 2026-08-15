@@ -5,7 +5,7 @@
   "language": "sql",
   "tier": 2,
   "title": "Customers who never ordered",
-  "prompt": "SQLite. Submit exactly one SELECT statement (a second, semicolon-separated statement is rejected).\n\nTables:\n  customers(id INTEGER PRIMARY KEY, name TEXT NOT NULL)\n  orders(id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL)\n\nEvery orders.customer_id points at a customers.id and is never NULL. Return the name of\nevery customer who has no orders at all. One column, named exactly: name. Row order does\nnot matter, and any formulation that returns the right rows scores the same.",
+  "prompt": "SQLite. Submit exactly one statement - a single SELECT, optionally preceded by a WITH clause (a second, semicolon-separated statement is rejected).\n\nTables:\n  customers(id INTEGER PRIMARY KEY, name TEXT NOT NULL)\n  orders(id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL)\n\nEvery orders.customer_id points at a customers.id and is never NULL. Return the name of\nevery customer who has no orders at all. One column, named exactly: name. Row order does\nnot matter, and any formulation that returns the right rows scores the same.",
   "starterCode": "-- one SELECT; one column: name\n",
   "softTimeLimitSeconds": 480,
   "cases": [
