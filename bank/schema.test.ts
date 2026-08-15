@@ -239,8 +239,8 @@ describe("sql write shape", () => {
     // Pinned to the rule's own message: the fix fixture is invalid four ways over
     // (sql language, missing tests, missing functionName, sql-only cases), so a bare
     // .toThrow() would stay green with the sql-on-fix rule deleted.
-    expect(() => exerciseSchema.parse({ ...base, kind: "fix", language: "sql", starterCode: "-- q", cases: sqlCases })).toThrow(/sql is only supported on write exercises/);
-    expect(() => exerciseSchema.parse({ ...base, kind: "predict-output", language: "sql", snippet: "SELECT 1;" })).toThrow(/sql is only supported on write exercises/);
+    expect(() => exerciseSchema.parse({ ...base, kind: "fix", language: "sql", starterCode: "-- q", cases: sqlCases })).toThrow(/sql is write-only/);
+    expect(() => exerciseSchema.parse({ ...base, kind: "predict-output", language: "sql", snippet: "SELECT 1;" })).toThrow(/sql is write-only/);
   });
   it("exports JVM_KINDS as the four java-graded kinds", () => {
     expect([...JVM_KINDS]).toEqual(["write", "fix", "write-harness", "fix-harness"]);

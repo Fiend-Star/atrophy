@@ -184,7 +184,7 @@ const exerciseUnion = z.discriminatedUnion("kind", [
  */
 const refinedUnion = exerciseUnion.superRefine((ex, ctx) => {
   const reject = (path: string, message: string) => ctx.addIssue({ code: "custom", path: [path], message });
-  const sqlIsWriteOnly = "sql is only supported on write exercises";
+  const sqlIsWriteOnly = "sql is write-only among the graded-code kinds - a sql cloze or recall is fine";
 
   if (ex.kind === "write" && ex.language === "sql") {
     if (ex.tests) reject("tests", "sql exercises have no hidden tests - grade them with cases");
