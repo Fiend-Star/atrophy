@@ -242,6 +242,17 @@ describe("sql write shape", () => {
     expect(() => exerciseSchema.parse({ ...base, kind: "fix", language: "sql", starterCode: "-- q", cases: sqlCases })).toThrow(/sql is write-only/);
     expect(() => exerciseSchema.parse({ ...base, kind: "predict-output", language: "sql", snippet: "SELECT 1;" })).toThrow(/sql is write-only/);
   });
+  it("accepts sql on cloze, which the rejection message above promises", () => {
+    // That message tells the author "a sql cloze or recall is fine". The recall half is
+    // pinned by the recall suite's language loop; this is the cloze half, so the string
+    // cannot quietly become a lie if a future rule starts rejecting sql clozes. Nothing
+    // runs for either kind - both grade by matching what the user typed.
+    const ex = exerciseSchema.parse({
+      ...base, id: "api-sql-901", axis: "api-memory", kind: "cloze", language: "sql",
+      snippet: "SELECT ____(*) FROM t;", acceptedAnswers: ["COUNT"],
+    });
+    expect(ex.language).toBe("sql");
+  });
   it("exports JVM_KINDS as the four java-graded kinds", () => {
     expect([...JVM_KINDS]).toEqual(["write", "fix", "write-harness", "fix-harness"]);
   });

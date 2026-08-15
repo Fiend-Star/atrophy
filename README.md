@@ -74,12 +74,12 @@ most information. Comfortable wins teach the rating nothing.
 
 Languages mix themselves. With no `--lang`, any one language holding three or
 more of your last six recorded drills has its candidates weighted down to a
-quarter for the next pick, so a lopsided pack can't quietly take over your
-rotation. It's a nudge, not a filter: if that language is all the bank has for
-the skill that came up, you still get it. Language-agnostic drills never count
-toward the three and are never weighted down. Asking for a language (`--lang
-java`) switches the nudge off - that's you steering - and `atrophy baseline`
-opts out too, since it already forces one drill per skill.
+quarter for the next pick, so a streak in one language works against itself
+instead of compounding. It's a nudge, not a filter: if that language is all
+the bank has for the skill that came up, you still get it. Language-agnostic
+drills never count toward the three and are never weighted down. Asking for a
+language (`--lang java`) switches the nudge off - that's you steering - and
+`atrophy baseline` opts out too, since it already forces one drill per skill.
 
 Java drills are graded too (`--lang java`, needs a JDK - see Install), and
 they add one more kind: a **behavioral** drill where the exercise ships its
