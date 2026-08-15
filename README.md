@@ -62,7 +62,7 @@ Not every skill is "write code against tests" - see the table below.
 | **Syntax recall** | Write a small function from a spec, one SQL `SELECT` against a fixture schema, or a concurrency primitive against its own harness | Hidden tests - for SQL, the rows the query returns; harness checks for the harness drills |
 | **Debugging** | Working-looking code has one planted bug - find and fix it | Hidden tests |
 | **Code reading** | Read a snippet, type exactly what it prints | Compared to the snippet's real output |
-| **API memory** | Fill in the blanked-out stdlib call, or implement the API against a shipped harness. Packs add two more shapes: a short recall question, and a multi-blank snippet scored one point per blank | Answer match, or harness checks |
+| **API memory** | Fill in the blanked-out stdlib call, implement the API against a shipped harness, or answer a short recall question testing a general fact. Packs can add a multi-blank snippet scored one point per blank | Answer match, or harness checks |
 | **Decomposition** | Outline a design (rate limiter, folder sync…) in bullets - or build it: an algorithm against tests, a data structure against its own harness | Self-scored against a revealed rubric; the build drills by tests or harness checks |
 
 The built-in bank spans Python, JavaScript, Java and SQL across three tiers -
@@ -75,16 +75,18 @@ most information. Comfortable wins teach the rating nothing.
 Java drills are graded too (`--lang java`, needs a JDK - see Install), and
 they add one more kind: a **behavioral** drill where the exercise ships its
 own Java test harness, so it can grade concurrency - races, deadlocks,
-visibility - instead of a return value. Java ships on every skill - 21 static
+visibility - instead of a return value. Java ships on every skill - 22 static
 exercises plus four generator families - and you can add more of your own as
 a pack (see Packs).
 
-SQL drills (`--lang sql`) need no toolchain at all: you submit a single
-`SELECT`, and it runs against the exercise's own fixture schema inside the
-bundled SQLite that already stores your ratings. Each exercise carries
-several cases with different fixtures, and grading compares the rows your
-query returns to the expected rows case by case - so a query that hardcodes
-one case's answer scores exactly that one case.
+SQL drills (`--lang sql`) need no toolchain at all. The syntax-recall ones
+have you submit a single `SELECT`, which runs against the exercise's own
+fixture schema inside the bundled SQLite that already stores your ratings:
+each exercise carries several cases with different fixtures, and grading
+compares the rows your query returns to the expected rows case by case - so a
+query that hardcodes one case's answer scores exactly that one case. `--lang
+sql` also reaches a recall question on the API memory axis, graded the same
+numeric-tolerant answer match as any other recall drill.
 
 ## The dashboard
 
