@@ -2,7 +2,16 @@ import { describe, expect, it } from "vitest";
 import type { ExerciseGenerator } from "../bank/generators/types.js";
 import type { Exercise, Language } from "../bank/schema.js";
 import { mulberry32 } from "./rng.js";
-import { availableAxes, familyOf, hiddenByToolchain, resolveExercise, selectExercise, targetTier, type SelectOptions } from "./select.js";
+import {
+  availableAxes,
+  familyOf,
+  hiddenByLanguages,
+  hiddenByToolchain,
+  resolveExercise,
+  selectExercise,
+  targetTier,
+  type SelectOptions,
+} from "./select.js";
 
 /** Toolchain fakes: every test says out loud which graders the host can run. */
 const JDK = { jdk: true };
@@ -534,5 +543,86 @@ describe("availableAxes with generators", () => {
     expect(availableAxes([], undefined, [anyGen], JDK)).toEqual(["decomposition"]);
     // Not java content, so no JDK is no reason to hide it.
     expect(availableAxes([], "java", [anyGen], NO_JDK)).toEqual(["decomposition"]);
+  });
+});
+
+describe("selectExercise - allowedLanguages", () => {
+  const javaEx = ex("sr-java-701", 1, "java");
+  const pyEx = ex("sr-py-701", 1);
+  const anyRecall: Exercise = {
+    id: "sr-any-701",
+    kind: "recall",
+    axis: "syntax-recall",
+    language: "any",
+    tier: 1,
+    title: "any recall",
+    prompt: "p",
+    softTimeLimitSeconds: 300,
+    testTimeoutMs: 10_000,
+    acceptedAnswers: ["a"],
+  };
+  const pool = { statics: [javaEx, pyEx, anyRecall], axis: "syntax-recall" as const, rating: 1150, toolchains: JDK };
+
+  it("allowlist filters candidates but 'any' always passes", () => {
+    const rng = mulberry32(11);
+    for (let i = 0; i < 200; i++) {
+      const pick = selectExercise({ ...pool, allowedLanguages: ["java"], random: rng });
+      expect(pick?.language).not.toBe("python");
+    }
+  });
+
+  it("explicit language bypasses the allowlist", () => {
+    const pick = selectExercise({ ...pool, allowedLanguages: ["java"], language: "python", random: () => 0 });
+    expect(pick?.id).toBe("sr-py-701");
+  });
+
+  it("empty allowlist means no filtering", () => {
+    // statics order is [java, python, any-recall], each weight 1 of 3: 0.5 lands on python.
+    const pick = selectExercise({ ...pool, allowedLanguages: [], random: () => 0.5 });
+    expect(pick?.id).toBe("sr-py-701");
+  });
+});
+
+describe("availableAxes - allowedLanguages", () => {
+  const javaWrite = ex("sr-java-801", 1, "java");
+  const pyReading: Exercise = { ...ex("sr-py-801", 1), axis: "code-reading" };
+  const bank = [javaWrite, pyReading];
+
+  it("availableAxes narrows under the allowlist", () => {
+    expect(availableAxes(bank, undefined, [], JDK)).toEqual(["syntax-recall", "code-reading"]);
+    // code-reading's only drill is python: it vanishes under a java-only allowlist.
+    expect(availableAxes(bank, undefined, [], JDK, ["java"])).toEqual(["syntax-recall"]);
+  });
+
+  it("an explicit language ignores the allowlist entirely", () => {
+    expect(availableAxes(bank, "python", [], JDK, ["java"])).toEqual(["code-reading"]);
+  });
+});
+
+describe("hiddenByLanguages", () => {
+  const javaWrite = ex("sr-java-901", 1, "java"); // JVM-graded: already un-offerable under NO_JDK
+  const pyWrite = ex("sr-py-901", 1);
+  const base = { statics: [javaWrite, pyWrite], axis: "syntax-recall" as const, toolchains: NO_JDK };
+
+  it("counts only allowlist-hidden, not toolchain-hidden", () => {
+    // Both arms use the real (no-JDK) toolchains, so the java write - already
+    // hidden by the toolchain gate in both arms - never counts here.
+    expect(hiddenByLanguages(base, ["java"])).toBe(1);
+  });
+
+  it("counts nothing when the allowlist is empty", () => {
+    expect(hiddenByLanguages(base, [])).toBe(0);
+  });
+
+  it("ignores other axes", () => {
+    expect(hiddenByLanguages({ ...base, axis: "debugging" }, ["java"])).toBe(0);
+  });
+
+  it("counts hidden generator families too", () => {
+    const javaGen = fakeGen("sr-java-cond", [1], "java");
+    const pyGen = fakeGen("sr-py-cond", [1]);
+    expect(
+      hiddenByLanguages({ statics: [], generators: [javaGen, pyGen], axis: "syntax-recall", toolchains: JDK }, ["java"]),
+    ).toBe(1);
   });
 });

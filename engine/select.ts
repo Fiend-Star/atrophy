@@ -108,7 +108,8 @@ interface Candidate {
 
 /**
  * One offer rule for both entry points: the requested language must match ("any"
- * content matches every request), and this host must be able to grade it.
+ * content matches every request), this host must be able to grade it, and (absent
+ * an explicit language) it must be on the allowlist.
  *
  * Only java drills whose grading starts a JVM need the JDK - write/fix/harness compile
  * and run, predict-output goes through the source launcher. Without one, the first
@@ -116,10 +117,28 @@ interface Candidate {
  * records anything, so offering the drill only wastes the user's time. A java cloze is
  * string-matched in-process and stays on offer, as does everything python, JS and sql
  * (sql rides the bundled better-sqlite3).
+ *
+ * The allowlist only applies when `language` is undefined: an explicit --lang is the
+ * user steering, same rule as the mix soft-cap, and it bypasses the allowlist outright.
+ * "any" content always passes; an empty or absent list means no filtering.
  */
-function offerable(c: Candidate, language: Language | undefined, toolchains: Toolchains): boolean {
+function offerable(
+  c: Candidate,
+  language: Language | undefined,
+  toolchains: Toolchains,
+  allowed?: Language[],
+): boolean {
   const matchesLang = language === undefined || c.language === language || c.language === "any";
   const needsJdk = c.language === "java" && spawnsJvm(c.kind);
+  if (
+    language === undefined &&
+    allowed !== undefined &&
+    allowed.length > 0 &&
+    c.language !== "any" &&
+    !allowed.includes(c.language)
+  ) {
+    return false;
+  }
   return matchesLang && (!needsJdk || toolchains.jdk);
 }
 
@@ -139,6 +158,12 @@ export interface SelectOptions {
    * the user steering, and selection never fights it.
    */
   recentLanguages?: (Language | "any")[];
+  /**
+   * Restrict candidates to this set (plus "any" content, which always passes).
+   * Ignored entirely when `language` is set - an explicit --lang is the user
+   * steering, same rule as the mix soft-cap. Empty or absent means no filtering.
+   */
+  allowedLanguages?: Language[];
   random?: Rng;
   /** Defaults to this host's real toolchains; tests pass a fake instead. */
   toolchains?: Toolchains;
@@ -158,11 +183,12 @@ export function selectExercise(opts: SelectOptions): Exercise | undefined {
     recentIds = [],
     language,
     recentLanguages,
+    allowedLanguages,
     random = Math.random,
     toolchains = hostToolchains(),
   } = opts;
   const recentFamilies = new Set(recentIds.map(familyOf));
-  const offer = (c: Candidate) => offerable(c, language, toolchains);
+  const offer = (c: Candidate) => offerable(c, language, toolchains, allowedLanguages);
   const capped =
     language === undefined && recentLanguages ? cappedLanguages(recentLanguages) : new Set<Language>();
   const langWeight = (l: Language | "any") => (l !== "any" && capped.has(l) ? LANGUAGE_CAP_MULTIPLIER : 1);
@@ -220,8 +246,9 @@ export function availableAxes(
   language?: Language,
   generators: ExerciseGenerator[] = [],
   toolchains: Toolchains = hostToolchains(),
+  allowedLanguages?: Language[],
 ): Axis[] {
-  const offer = (c: Candidate) => offerable(c, language, toolchains);
+  const offer = (c: Candidate) => offerable(c, language, toolchains, allowedLanguages);
   return AXES.filter(
     (axis) => bank.some((e) => e.axis === axis && offer(e)) || generators.some((g) => g.axis === axis && offer(g)),
   );
@@ -238,6 +265,25 @@ export function hiddenByToolchain(
   const { statics, generators = [], axis, language, toolchains = hostToolchains() } = opts;
   const hidden = (c: Candidate) =>
     offerable(c, language, { jdk: true }) && !offerable(c, language, toolchains);
+  return (
+    statics.filter((e) => e.axis === axis && hidden(e)).length +
+    generators.filter((g) => g.axis === axis && hidden(g)).length
+  );
+}
+
+/**
+ * How many candidates for this axis the language allowlist hid: drills that would be
+ * offerable without it but are excluded once it applies. Mirrors `hiddenByToolchain`'s
+ * two-arm shape - both arms use the real toolchains, so a JDK-hidden java write is
+ * never counted here too (it was never offerable to begin with).
+ */
+export function hiddenByLanguages(
+  opts: Pick<SelectOptions, "statics" | "generators" | "axis" | "toolchains">,
+  allowed: Language[],
+): number {
+  const { statics, generators = [], axis, toolchains = hostToolchains() } = opts;
+  const hidden = (c: Candidate) =>
+    offerable(c, undefined, toolchains) && !offerable(c, undefined, toolchains, allowed);
   return (
     statics.filter((e) => e.axis === axis && hidden(e)).length +
     generators.filter((g) => g.axis === axis && hidden(g)).length
