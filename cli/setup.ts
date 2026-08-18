@@ -147,37 +147,80 @@ function runFlags(flags: SetupFlags, discovered: Discovered): void {
   printState(discovered);
 }
 
-/** Comma-separated 1-based picks into LANGUAGES; blank/garbage-only answer means "all". */
-function parseLanguagePicks(answer: string): Language[] | undefined {
+/** Either a valid pick (`value` may itself be "all", i.e. `undefined`) or an invalid one to re-prompt for. */
+type PickResult<T> = { valid: true; value: T } | { valid: false };
+
+/**
+ * Comma-separated 1-based picks into LANGUAGES; a blank answer means "all". Any token that
+ * isn't a number in range is the whole answer's error - a partial pick would silently persist
+ * a narrower allowlist than the user typed, which is worse than re-asking.
+ */
+function parseLanguagePicks(answer: string): PickResult<Language[] | undefined> {
   const picks = answer
     .trim()
     .split(",")
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
-  if (picks.length === 0) return undefined;
+  if (picks.length === 0) return { valid: true, value: undefined };
   const langs: Language[] = [];
   for (const p of picks) {
     const n = Number.parseInt(p, 10);
-    const lang = Number.isInteger(n) ? LANGUAGES[n - 1] : undefined;
-    if (lang) langs.push(lang);
+    const lang = Number.isInteger(n) && n > 0 ? LANGUAGES[n - 1] : undefined;
+    if (!lang) return { valid: false };
+    langs.push(lang);
   }
-  const deduped = [...new Set(langs)];
-  return deduped.length > 0 ? deduped : undefined;
+  return { valid: true, value: [...new Set(langs)] };
 }
 
-/** `0` (or blank/garbage) means "all"; otherwise a 1-based index into `tracks`. */
-function parseTrackPick(answer: string, tracks: Track[]): string | undefined {
-  const n = Number.parseInt(answer.trim(), 10);
-  if (!Number.isInteger(n) || n <= 0) return undefined;
-  return tracks[n - 1]?.name;
+/** `0` or blank means "all"; a positive index past the end of `tracks` is invalid, not "all". */
+function parseTrackPick(answer: string, tracks: Track[]): PickResult<string | undefined> {
+  const trimmed = answer.trim();
+  if (trimmed.length === 0 || trimmed === "0") return { valid: true, value: undefined };
+  const n = Number.parseInt(trimmed, 10);
+  if (!Number.isInteger(n) || n < 0 || n > tracks.length) return { valid: false };
+  return { valid: true, value: tracks[n - 1]!.name };
+}
+
+/** Loops on an out-of-range answer instead of ever falling through to "all". */
+async function pickLanguages(io: SetupIO): Promise<Language[] | undefined> {
+  for (;;) {
+    const answer = await io.question("  Pick languages (comma-separated numbers, empty = all) > ");
+    const picked = parseLanguagePicks(answer);
+    if (picked.valid) return picked.value;
+    console.log(pc.red(`  invalid pick "${answer.trim()}" - use numbers 1-${LANGUAGES.length}, comma-separated`));
+  }
+}
+
+/**
+ * Loops on an out-of-range answer, and also on a valid index whose track name is claimed by
+ * more than one pack - persisting an ambiguous name would only defer the failure to drill time.
+ */
+async function pickTrack(io: SetupIO, discovered: Discovered): Promise<string | undefined> {
+  for (;;) {
+    const answer = await io.question("  Pick a track (number, 0 = all) > ");
+    const picked = parseTrackPick(answer, discovered.tracks);
+    if (!picked.valid) {
+      console.log(pc.red(`  invalid pick "${answer.trim()}" - use 0-${discovered.tracks.length}`));
+      continue;
+    }
+    if (picked.value === undefined) return undefined;
+    const matches = discovered.tracks.filter((t) => t.name === picked.value);
+    if (matches.length > 1) {
+      console.log(
+        pc.red(`  track "${picked.value}" is ambiguous: ${matches.map((m) => m.dir).join(", ")}`) +
+          pc.dim(" - rename one via pack.json"),
+      );
+      continue;
+    }
+    return picked.value;
+  }
 }
 
 async function runInteractive(io: SetupIO, discovered: Discovered): Promise<void> {
   console.log(pc.bold("\n  atrophy setup\n"));
   console.log("  Languages:");
   LANGUAGES.forEach((l, i) => console.log(`    ${i + 1}. ${l}`));
-  const langAnswer = await io.question("  Pick languages (comma-separated numbers, empty = all) > ");
-  const languages = parseLanguagePicks(langAnswer);
+  const languages = await pickLanguages(io);
 
   console.log("\n  Track:");
   console.log("    0. all");
@@ -185,8 +228,7 @@ async function runInteractive(io: SetupIO, discovered: Discovered): Promise<void
     const n = discovered.counts.get(t.dir) ?? 0;
     console.log(`    ${i + 1}. ${t.name} (${n} drill${n === 1 ? "" : "s"})`);
   });
-  const trackAnswer = await io.question("  Pick a track (number, 0 = all) > ");
-  const track = parseTrackPick(trackAnswer, discovered.tracks);
+  const track = await pickTrack(io, discovered);
 
   applyConfig({ set: true, value: languages }, { set: true, value: track });
   printState(discovered);
@@ -196,6 +238,9 @@ export async function setupAction(flags: SetupFlags, deps: SetupDeps): Promise<v
   const discovered = discoverTracks(deps.roots());
 
   if (flags.show) {
+    if (flags.languages !== undefined) console.log(pc.yellow("  ignoring --languages (--show never writes)"));
+    if (flags.allLanguages) console.log(pc.yellow("  ignoring --all-languages (--show never writes)"));
+    if (flags.track !== undefined) console.log(pc.yellow("  ignoring --track (--show never writes)"));
     printState(discovered);
     return;
   }

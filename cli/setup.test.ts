@@ -196,4 +196,68 @@ describe("setupAction: interactive (no flags)", () => {
     // the scripted answers were never consumed
     expect(readConfig().languages).toBeUndefined();
   });
+
+  it("re-prompts on an out-of-range language pick instead of silently writing 'all'", async () => {
+    // LANGUAGES has 4 entries; "5" is out of range and must not be treated as "all".
+    const io = stub(["5", "1,3", "2"]);
+    await setupAction({}, deps(io));
+
+    const cfg = readConfig();
+    expect(cfg.languages).toEqual(["python", "java"]);
+    expect(cfg.track).toBe("tpack");
+    expect(logged.some((l) => l.toLowerCase().includes("invalid"))).toBe(true);
+  });
+
+  it("re-prompts on an out-of-range track pick instead of silently writing 'all'", async () => {
+    // tracks = [base, tpack]; "5" is past the list and must not be treated as "all".
+    const io = stub(["", "5", "2"]);
+    await setupAction({}, deps(io));
+
+    const cfg = readConfig();
+    expect(cfg.languages).toBeUndefined();
+    expect(cfg.track).toBe("tpack");
+    expect(logged.some((l) => l.toLowerCase().includes("invalid"))).toBe(true);
+  });
+
+  it("refuses to persist an ambiguous track pick and re-prompts", async () => {
+    const packDir2 = join(root, "pack2");
+    mkdirSync(packDir2, { recursive: true });
+    writeFileSync(join(packDir2, "pack.json"), JSON.stringify({ name: "tpack" }), "utf8");
+    writeFileSync(join(packDir2, "tp2-recall-001.json"), JSON.stringify(recall("tp2-recall-001", "d")), "utf8");
+    const twoPackDeps = (io: SetupIO): SetupDeps => ({
+      roots: () => ({ base: bankDir, packs: [packDir, packDir2] }),
+      io,
+    });
+
+    // tracks = [base, tpack(packDir), tpack(packDir2)]; "2" names an ambiguous "tpack".
+    const io = stub(["", "2", "0"]);
+    await setupAction({}, twoPackDeps(io));
+
+    const cfg = readConfig();
+    expect(cfg.track).toBeUndefined();
+    expect(logged.some((l) => l.toLowerCase().includes("ambiguous"))).toBe(true);
+  });
+});
+
+describe("setupAction: --show combined with setter flags", () => {
+  it("prints an ignoring-warning per setter flag and writes nothing", async () => {
+    writeCfg({ languages: ["python"], track: "tpack" });
+    const before = readConfig();
+
+    await setupAction({ show: true, languages: "java", track: "nope" }, deps());
+
+    expect(readConfig()).toEqual(before);
+    expect(logged.some((l) => l.includes("ignoring --languages (--show never writes)"))).toBe(true);
+    expect(logged.some((l) => l.includes("ignoring --track (--show never writes)"))).toBe(true);
+  });
+
+  it("also warns for --all-languages", async () => {
+    writeCfg({ languages: ["python"] });
+    const before = readConfig();
+
+    await setupAction({ show: true, allLanguages: true }, deps());
+
+    expect(readConfig()).toEqual(before);
+    expect(logged.some((l) => l.includes("ignoring --all-languages (--show never writes)"))).toBe(true);
+  });
 });
