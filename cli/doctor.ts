@@ -310,9 +310,12 @@ export function checkConfig(base: string, packs: string[], env: NodeJS.ProcessEn
       }
     }
 
-    // track: undefined means "all"; otherwise it must resolve to exactly one discovered track
+    // track: undefined means "all" - "all" itself normalizes the same way configTrack()
+    // does, since doctor and `setup --show` print "track: all" as the no-focus state and
+    // a hand-written {"track":"all"} must not then read back as an unknown track name.
     const rawTrack: unknown = config.track;
-    const wanted = typeof rawTrack === "string" ? rawTrack.trim().toLowerCase() || undefined : undefined;
+    const trackNorm = typeof rawTrack === "string" ? rawTrack.trim().toLowerCase() : "";
+    const wanted = trackNorm && trackNorm !== "all" ? trackNorm : undefined;
     let trackLine: string;
     if (wanted === undefined) {
       trackLine = "track: all";

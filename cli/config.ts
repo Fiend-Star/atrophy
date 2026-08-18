@@ -53,12 +53,18 @@ export function configLanguages(env: NodeJS.ProcessEnv = process.env): Language[
   return raw.filter((l): l is Language => typeof l === "string" && (LANGUAGES as readonly string[]).includes(l));
 }
 
-/** Configured track name, normalized the way track matching normalizes. */
+/**
+ * Configured track name, normalized the way track matching normalizes. Blank and "all"
+ * both mean "no focus" - "all" is the reserved escape hatch `--track all`/`setup --track
+ * all` write, and doctor/setup print it back as the normal no-focus state, so a
+ * hand-edited config using the same word config output teaches must be tolerated too,
+ * not rejected as an unknown track name.
+ */
 export function configTrack(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const raw: unknown = readConfig(env).track;
   if (typeof raw !== "string") return undefined;
   const t = raw.trim().toLowerCase();
-  return t || undefined;
+  return t && t !== "all" ? t : undefined;
 }
 
 /** Additive pack directories: ATROPHY_PACKS (path-delimiter separated) then config packs. */

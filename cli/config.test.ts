@@ -151,6 +151,12 @@ describe("configLanguages / configTrack", () => {
     expect(configTrack({ ATROPHY_CONFIG: configFile(JSON.stringify({ track: "   " })) })).toBeUndefined();
     expect(configTrack({ ATROPHY_CONFIG: configFile("{}") })).toBeUndefined();
   });
+  it("a hand-written \"all\" (any case/whitespace) means undefined, same as blank", () => {
+    // doctor and `setup --show` print "track: all" as the normal no-focus state, so a
+    // hand-edited config using that same word must not read back as an unknown track.
+    expect(configTrack({ ATROPHY_CONFIG: configFile(JSON.stringify({ track: "all" })) })).toBeUndefined();
+    expect(configTrack({ ATROPHY_CONFIG: configFile(JSON.stringify({ track: " ALL " })) })).toBeUndefined();
+  });
   it("falls back to process.env when called with no argument", () => {
     withConfig(JSON.stringify({ languages: ["python"], track: "Aurora" }));
     expect(configLanguages()).toEqual(["python"]);

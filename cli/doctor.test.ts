@@ -308,6 +308,15 @@ describe("checkConfig", () => {
     expect(r.detail).toContain("base");
   });
 
+  it("a hand-written {\"track\":\"all\"} reports the same no-focus state as no track at all", () => {
+    // doctor prints "track: all" for a clean config (see above); a config that spells
+    // that word out by hand must land on the same pass/no-warning outcome, not read as
+    // an unknown track name.
+    const r = checkConfig(base, [], envWithConfig(JSON.stringify({ track: "all" })));
+    expect(r.status).toBe("pass");
+    expect(r.detail).toContain("track: all");
+  });
+
   it("reports the exact drill count for a track that matches a discovered pack", () => {
     const pack = mkdtempSync(join(tmpdir(), "atrophy-doc-cfg-pack-"));
     writeFileSync(join(pack, "pack.json"), JSON.stringify({ name: "aurora" }));
