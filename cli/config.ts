@@ -1,11 +1,16 @@
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
+import { LANGUAGES, type Language } from "../bank/schema.js";
 
 export interface AtrophyConfig {
   leaderboard?: { token?: string; handle?: string; url?: string };
   /** Extra exercise-bank directories merged on top of the built-in bank. */
   packs?: string[];
+  /** Serve only these languages (plus "any"-tagged drills). Absent/empty = all. */
+  languages?: Language[];
+  /** Serve only the pack with this track name. Absent = all content. */
+  track?: string;
 }
 
 export function configPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -39,6 +44,21 @@ function canonical(p: string): string {
   } catch {
     return resolve(p);
   }
+}
+
+/** Validated language allowlist from config; unknown entries are dropped, never fatal. */
+export function configLanguages(env: NodeJS.ProcessEnv = process.env): Language[] {
+  const raw: unknown = readConfig(env).languages;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((l): l is Language => typeof l === "string" && (LANGUAGES as readonly string[]).includes(l));
+}
+
+/** Configured track name, normalized the way track matching normalizes. */
+export function configTrack(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const raw: unknown = readConfig(env).track;
+  if (typeof raw !== "string") return undefined;
+  const t = raw.trim().toLowerCase();
+  return t || undefined;
 }
 
 /** Additive pack directories: ATROPHY_PACKS (path-delimiter separated) then config packs. */

@@ -2,7 +2,7 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { packDirs, readConfig } from "./config.js";
+import { configLanguages, configTrack, packDirs, readConfig } from "./config.js";
 
 const cleanups: (() => void)[] = [];
 const original = { ...process.env };
@@ -133,5 +133,27 @@ describe("packDirs", () => {
     const missing = join(tmpdir(), "atrophy-pack-does-not-exist", "sub");
     const env = { ATROPHY_CONFIG: configFile("{}"), ATROPHY_PACKS: missing };
     expect(packDirs(env)).toEqual([resolve(missing)]);
+  });
+});
+
+describe("configLanguages / configTrack", () => {
+  it("returns only valid Language members, dropping garbage", () => {
+    const env = { ATROPHY_CONFIG: configFile(JSON.stringify({ languages: ["java", "cobol", 42, "sql"] })) };
+    expect(configLanguages(env)).toEqual(["java", "sql"]);
+  });
+  it("returns [] for absent, non-array, or empty", () => {
+    expect(configLanguages({ ATROPHY_CONFIG: configFile("{}") })).toEqual([]);
+    expect(configLanguages({ ATROPHY_CONFIG: configFile(JSON.stringify({ languages: "java" })) })).toEqual([]);
+    expect(configLanguages({ ATROPHY_CONFIG: configFile(JSON.stringify({ languages: [] })) })).toEqual([]);
+  });
+  it("track is trimmed and lowercased; blank means undefined", () => {
+    expect(configTrack({ ATROPHY_CONFIG: configFile(JSON.stringify({ track: "  Aurora " })) })).toBe("aurora");
+    expect(configTrack({ ATROPHY_CONFIG: configFile(JSON.stringify({ track: "   " })) })).toBeUndefined();
+    expect(configTrack({ ATROPHY_CONFIG: configFile("{}") })).toBeUndefined();
+  });
+  it("falls back to process.env when called with no argument", () => {
+    withConfig(JSON.stringify({ languages: ["python"], track: "Aurora" }));
+    expect(configLanguages()).toEqual(["python"]);
+    expect(configTrack()).toBe("aurora");
   });
 });
