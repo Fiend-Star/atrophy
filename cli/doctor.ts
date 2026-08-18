@@ -5,11 +5,11 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pc from "picocolors";
-import { loadBank, loadBankDetailed, type Axis, type CodeExercise, type Language } from "../bank/schema.js";
+import { LANGUAGES, loadBank, loadBankDetailed, type Axis, type CodeExercise, type Language } from "../bank/schema.js";
 import { grade, pythonCommand, solutionFileName } from "../engine/grader.js";
 import { MIN_JDK_MAJOR, javacCommand, missingJdkHint, parseJavaMajor } from "../engine/javatool.js";
 import { Store } from "../store/db.js";
-import { configLanguages, configTrack, readConfig } from "./config.js";
+import { readConfig } from "./config.js";
 import { DEFAULT_LEADERBOARD_URL, syncDisabled } from "./publish.js";
 import { ambiguousTracks, resolveTracks } from "./tracks.js";
 
@@ -287,11 +287,18 @@ export function checkConfig(base: string, packs: string[], env: NodeJS.ProcessEn
 
     let warned = false;
 
+    // One read, reused for both fields below - configLanguages()/configTrack() each
+    // read the file themselves, which would mean reading it three times over for one
+    // check; their validation logic is short enough to inline against a single read.
+    const config = readConfig(env);
+
     // languages: validation silently drops unknown entries - name what it dropped
-    const configuredLanguages = configLanguages(env);
+    const rawLanguages: unknown = config.languages;
+    const configuredLanguages: Language[] = Array.isArray(rawLanguages)
+      ? rawLanguages.filter((l): l is Language => typeof l === "string" && (LANGUAGES as readonly string[]).includes(l))
+      : [];
     let languagesLine =
       configuredLanguages.length === 0 ? "languages: all" : `languages: ${configuredLanguages.join(", ")}`;
-    const rawLanguages = readConfig(env).languages;
     if (Array.isArray(rawLanguages)) {
       const known = new Set<string>(configuredLanguages);
       const dropped = rawLanguages
@@ -304,7 +311,8 @@ export function checkConfig(base: string, packs: string[], env: NodeJS.ProcessEn
     }
 
     // track: undefined means "all"; otherwise it must resolve to exactly one discovered track
-    const wanted = configTrack(env);
+    const rawTrack: unknown = config.track;
+    const wanted = typeof rawTrack === "string" ? rawTrack.trim().toLowerCase() || undefined : undefined;
     let trackLine: string;
     if (wanted === undefined) {
       trackLine = "track: all";

@@ -248,22 +248,7 @@ describe("checkConfig", () => {
 
   beforeEach(() => {
     base = mkdtempSync(join(tmpdir(), "atrophy-doc-cfg-base-"));
-    writeFileSync(
-      join(base, "sr-py-001.json"),
-      JSON.stringify({
-        kind: "write",
-        id: "sr-py-001",
-        axis: "syntax-recall",
-        tier: 1,
-        title: "t",
-        prompt: "p",
-        softTimeLimitSeconds: 60,
-        language: "python",
-        functionName: "f",
-        starterCode: "def f():\n    pass\n",
-        tests: [{ args: [], expected: null }],
-      }),
-    );
+    writeExercise(base, "sr-py-001");
     configDir = mkdtempSync(join(tmpdir(), "atrophy-doc-cfg-"));
   });
   afterEach(() => {
@@ -276,6 +261,26 @@ describe("checkConfig", () => {
     const file = join(configDir, "config.json");
     writeFileSync(file, json, "utf8");
     return { ATROPHY_CONFIG: file };
+  }
+
+  /** One valid, minimal python `write` exercise, same shape as the `base` fixture above. */
+  function writeExercise(dir: string, id: string): void {
+    writeFileSync(
+      join(dir, `${id}.json`),
+      JSON.stringify({
+        kind: "write",
+        id,
+        axis: "syntax-recall",
+        tier: 1,
+        title: "t",
+        prompt: "p",
+        softTimeLimitSeconds: 60,
+        language: "python",
+        functionName: "f",
+        starterCode: "def f():\n    pass\n",
+        tests: [{ args: [], expected: null }],
+      }),
+    );
   }
 
   it("reports 'all' for a clean config with no warning", () => {
@@ -300,5 +305,34 @@ describe("checkConfig", () => {
     expect(r.status).toBe("warn");
     expect(r.detail).toContain("nope");
     expect(r.detail).toContain("base");
+  });
+
+  it("reports the exact drill count for a track that matches a discovered pack", () => {
+    const pack = mkdtempSync(join(tmpdir(), "atrophy-doc-cfg-pack-"));
+    writeFileSync(join(pack, "pack.json"), JSON.stringify({ name: "aurora" }));
+    writeExercise(pack, "sr-py-101"); // exactly one drill - pins the count in the assertion below
+    try {
+      const r = checkConfig(base, [pack], envWithConfig(JSON.stringify({ track: "aurora" })));
+      expect(r.status).toBe("pass");
+      expect(r.detail).toContain("track: aurora (1 drills)");
+    } finally {
+      rmSync(pack, { recursive: true, force: true });
+    }
+  });
+
+  it("warns and names every dir when the configured track name is claimed by more than one pack", () => {
+    const packA = mkdtempSync(join(tmpdir(), "atrophy-doc-cfg-packA-"));
+    const packB = mkdtempSync(join(tmpdir(), "atrophy-doc-cfg-packB-"));
+    writeFileSync(join(packA, "pack.json"), JSON.stringify({ name: "aurora" }));
+    writeFileSync(join(packB, "pack.json"), JSON.stringify({ name: "aurora" }));
+    try {
+      const r = checkConfig(base, [packA, packB], envWithConfig(JSON.stringify({ track: "aurora" })));
+      expect(r.status).toBe("warn");
+      expect(r.detail).toContain(packA);
+      expect(r.detail).toContain(packB);
+    } finally {
+      rmSync(packA, { recursive: true, force: true });
+      rmSync(packB, { recursive: true, force: true });
+    }
   });
 });
