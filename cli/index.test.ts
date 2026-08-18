@@ -40,12 +40,15 @@ const PACK_EXERCISE = {
   acceptedAnswers: ["tpack"],
 };
 
-const ENV_KEYS = ["ATROPHY_CONFIG", "ATROPHY_PACKS", "ATROPHY_NO_SYNC", "ATROPHY_DB"] as const;
+const ENV_KEYS = ["ATROPHY_CONFIG", "ATROPHY_PACKS", "ATROPHY_NO_SYNC", "ATROPHY_DB", "ATROPHY_BANK"] as const;
 
 let dir: string;
 let packDir: string;
 let store: Store;
+/** stdout, stderr, and both interleaved - the last one is how ordering is asserted. */
 let logged: string[];
+let errors: string[];
+let output: string[];
 let saved: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>>;
 
 /** picocolors emits escapes when the run has a TTY; assertions read plain text. */
@@ -72,12 +75,22 @@ beforeEach(() => {
   process.env.ATROPHY_CONFIG = join(dir, "config.json");
   process.env.ATROPHY_PACKS = packDir;
   process.env.ATROPHY_NO_SYNC = "1"; // every drill here is --show, but a leak must not reach the board
+  delete process.env.ATROPHY_BANK; // these tests read the built-in bank; one test sets its own
   store = new Store(join(dir, "t.db"));
   seam.calls.length = 0;
   seam.picked.length = 0;
   logged = [];
+  errors = [];
+  output = [];
   vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
-    logged.push(strip(args.map(String).join(" ")));
+    const line = strip(args.map(String).join(" "));
+    logged.push(line);
+    output.push(line);
+  });
+  vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+    const line = strip(args.map(String).join(" "));
+    errors.push(line);
+    output.push(line);
   });
 });
 
@@ -133,9 +146,48 @@ describe("language allowlist wiring", () => {
     const pick = lastPick();
     expect(pick.language).toBe("java");
     expect(pick.allowedLanguages).toBeUndefined();
-    expect(logged).toContain(
+    // stderr, so a piped `atrophy drill` keeps the note out of the drill content
+    expect(errors).toContain(
       "note: --lang java is outside your configured languages (python) - serving it anyway",
     );
+  });
+
+  it("explains the narrowing before reporting an axis it emptied", async () => {
+    // a bank the allowlist can empty: one java drill on the one axis with no
+    // generator families, so nothing else can be offered in its place
+    const bankDir = mkdtempSync(join(tmpdir(), "atrophy-bank-"));
+    writeFileSync(
+      join(bankDir, "dec-java-900.json"),
+      JSON.stringify({
+        id: "dec-java-900",
+        kind: "recall", // no JVM, so the allowlist (not a missing JDK) is what hides it
+        axis: "decomposition",
+        language: "java",
+        tier: 1,
+        title: "Java-only drill",
+        prompt: "Where does this drill come from?",
+        softTimeLimitSeconds: 60,
+        acceptedAnswers: ["the temp bank"],
+      }),
+      "utf8",
+    );
+    process.env.ATROPHY_BANK = bankDir; // replaces the built-in bank
+    delete process.env.ATROPHY_PACKS;
+    writeCfg({ languages: ["python"] });
+    const mod = await importCli();
+
+    try {
+      const ok = await mod.drillOnce(store, { axis: "decomposition", show: true });
+
+      expect(ok).toBe(false);
+      const narrowing = output.findIndex((l) => l.startsWith("config limits languages to python - 1 drills"));
+      const empty = output.findIndex((l) => l.startsWith('no exercises in the bank for axis "decomposition"'));
+      expect(narrowing).toBeGreaterThanOrEqual(0);
+      expect(empty).toBeGreaterThan(narrowing);
+    } finally {
+      delete process.env.ATROPHY_BANK;
+      rmSync(bankDir, { recursive: true, force: true });
+    }
   });
 
   it("no config: no allowlist, no narrowing line", async () => {

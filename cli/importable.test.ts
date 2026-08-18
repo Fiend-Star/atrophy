@@ -26,14 +26,25 @@ vi.mock("../engine/select.js", async (importOriginal) => {
 
 let dir: string;
 let store: Store;
+let envDir: string;
+let savedConfig: string | undefined;
 
 beforeAll(() => {
   // no drill here records or syncs (every call is --show), but a leaked write
   // must never be able to reach the real board
   process.env.ATROPHY_NO_SYNC = "1";
+  // selection reads the config (languages allowlist, track focus), so point it at
+  // a path that does not exist: these tests must not see the developer's own
+  // ~/.atrophy/config.json, which could narrow the pool under them
+  envDir = mkdtempSync(join(tmpdir(), "atrophy-cli-env-"));
+  savedConfig = process.env.ATROPHY_CONFIG;
+  process.env.ATROPHY_CONFIG = join(envDir, "config.json");
 });
 afterAll(() => {
   delete process.env.ATROPHY_NO_SYNC;
+  if (savedConfig === undefined) delete process.env.ATROPHY_CONFIG;
+  else process.env.ATROPHY_CONFIG = savedConfig;
+  rmSync(envDir, { recursive: true, force: true });
 });
 
 beforeEach(() => {

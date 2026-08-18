@@ -119,8 +119,10 @@ interface DrillPool {
 /** Track focus for this run: the flag, else config; "all" is the reserved escape hatch. */
 function focusedTrack(flags: DrillFlags, base: string, packs: string[]): Track | undefined {
   const requested = flags.track?.trim().toLowerCase();
-  const wanted = requested === "all" ? undefined : (requested || configTrack());
-  if (!wanted) return undefined;
+  // `??`, not `||`: an explicit but empty --track is a name that matches nothing, and
+  // falling back to the configured track there would silently serve something else.
+  const wanted = requested === "all" ? undefined : (requested ?? configTrack());
+  if (wanted === undefined) return undefined;
   const tracks = resolveTracks(base, packs);
   const track = findTrack(tracks, wanted); // an ambiguous name throws from here
   if (!track) {
@@ -154,7 +156,8 @@ function resolvePool(flags: DrillFlags): DrillPool {
 function announcePool(pool: DrillPool, language: Language | undefined): void {
   if (pool.track) console.log(pc.dim(`track: ${pool.track.name} (${pool.bank.length} drills)`));
   if (language && pool.configured.length > 0 && !pool.configured.includes(language)) {
-    console.log(
+    // stderr, like the neighbouring missing-JDK warning: piped stdout stays drill content
+    console.error(
       pc.yellow(
         `note: --lang ${language} is outside your configured languages (${pool.configured.join(", ")})` +
           " - serving it anyway",
@@ -219,8 +222,10 @@ export async function drillOnce(
     }
   } else {
     const pool = resolvePool(flags);
-    announcePool(pool, language);
+    // after parseAxis: a rejected --axis exits, and narrowing notes about a drill that
+    // never happens are noise in front of the error
     const axis = flags.axis ? parseAxis(flags.axis) : dueAxis(store, pool, language);
+    announcePool(pool, language);
     const recent = store.recentSessions(axis, 6).map((s) => s.exercise_id);
     const pick: SelectOptions = {
       statics: pool.bank,
