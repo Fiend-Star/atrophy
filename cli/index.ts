@@ -5,13 +5,22 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import pc from "picocolors";
 import { allGenerators } from "../bank/generators/index.js";
-import { AXES, LANGUAGES, loadBank, type Axis, type Exercise, type Language } from "../bank/schema.js";
+import type { ExerciseGenerator } from "../bank/generators/types.js";
+import { AXES, LANGUAGES, loadBank, loadBankDetailed, type Axis, type Exercise, type Language } from "../bank/schema.js";
 import { buildPayload, startServer } from "./serve.js";
 import { autoSync, isRegistered, maybePrintPublishHint, publishCommand } from "./publish.js";
-import { configPath, packDirs } from "./config.js";
+import { configLanguages, configPath, configTrack, packDirs } from "./config.js";
+import { findTrack, resolveTracks, type Track } from "./tracks.js";
 import { detectAssistants } from "../engine/guard.js";
 import { javacCommand, missingJdkHint } from "../engine/javatool.js";
-import { availableAxes, hiddenByToolchain, resolveExercise, selectExercise, type SelectOptions } from "../engine/select.js";
+import {
+  availableAxes,
+  hiddenByLanguages,
+  hiddenByToolchain,
+  resolveExercise,
+  selectExercise,
+  type SelectOptions,
+} from "../engine/select.js";
 import { previewExercise, runDrill } from "../engine/session.js";
 import { computeStreak } from "../engine/streak.js";
 import { detectRegression, detectRegressions, type Regression } from "../engine/regression.js";
@@ -28,8 +37,12 @@ import { reportCommand } from "./report.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-/** The built-in bank first, then any configured packs merged on top of it. */
-function bankDirs(): string[] {
+/**
+ * The built-in bank and the configured packs, kept apart: a track names exactly one
+ * of these roots, so anything resolving tracks needs the split rather than the
+ * flattened list `loadBank` wants.
+ */
+export function bankRoots(): { base: string; packs: string[] } {
   const base = (() => {
     if (process.env.ATROPHY_BANK) return process.env.ATROPHY_BANK;
     const candidates = [
@@ -48,6 +61,12 @@ function bankDirs(): string[] {
       throw new Error(`pack directory not found: ${p} (check ATROPHY_PACKS / "packs" in ${configPath()})`);
     }
   }
+  return { base, packs };
+}
+
+/** The built-in bank first, then any configured packs merged on top of it. */
+function bankDirs(): string[] {
+  const { base, packs } = bankRoots();
   return [base, ...packs];
 }
 
@@ -59,6 +78,7 @@ interface DrillFlags {
   exercise?: string;
   tier?: string;
   show?: boolean;
+  track?: string;
 }
 
 function parseAxis(value: string): Axis {
@@ -78,12 +98,78 @@ function parseLang(value: string): Language {
 }
 
 /**
+ * What one drill may draw from, after the two config preferences apply. Both are
+ * defaults, not locks: an explicit `--lang` disables the allowlist and `--track all`
+ * disables track focus, exactly as `--lang` already disables the mix soft-cap.
+ */
+interface DrillPool {
+  /** Statics after track focus. */
+  bank: Exercise[];
+  /** Every static across base + packs; baseline reports what the narrowing cost. */
+  unfiltered: Exercise[];
+  /** Empty under a pack track: packs ship JSON, and the built-in families are base content. */
+  generators: ExerciseGenerator[];
+  track?: Track;
+  /** Allowlist handed to selection: absent when `--lang` steers or config lists nothing. */
+  allowed?: Language[];
+  /** The configured allowlist as written, for the `--lang` note (which outlives `allowed`). */
+  configured: Language[];
+}
+
+/** Track focus for this run: the flag, else config; "all" is the reserved escape hatch. */
+function focusedTrack(flags: DrillFlags, base: string, packs: string[]): Track | undefined {
+  const requested = flags.track?.trim().toLowerCase();
+  const wanted = requested === "all" ? undefined : (requested || configTrack());
+  if (!wanted) return undefined;
+  const tracks = resolveTracks(base, packs);
+  const track = findTrack(tracks, wanted); // an ambiguous name throws from here
+  if (!track) {
+    throw new Error(
+      `unknown track "${wanted}" - discovered: ${tracks.map((t) => t.name).join(", ")}` +
+        ` (check --track / "track" in ${configPath()})`,
+    );
+  }
+  return track;
+}
+
+function resolvePool(flags: DrillFlags): DrillPool {
+  const { base, packs } = bankRoots();
+  const track = focusedTrack(flags, base, packs);
+  // one walk for both views: `root` is the dirs[] member each exercise was found under
+  const entries = loadBankDetailed([base, ...packs]);
+  const unfiltered = entries.map((e) => e.exercise);
+  const bank = track ? entries.filter((e) => e.root === track.dir).map((e) => e.exercise) : unfiltered;
+  const configured = configLanguages();
+  return {
+    bank,
+    unfiltered,
+    generators: !track || track.isBase ? allGenerators : [],
+    track,
+    allowed: flags.lang || configured.length === 0 ? undefined : configured,
+    configured,
+  };
+}
+
+/** Narrowing is never silent: whatever shrank the pool says so before the drill starts. */
+function announcePool(pool: DrillPool, language: Language | undefined): void {
+  if (pool.track) console.log(pc.dim(`track: ${pool.track.name} (${pool.bank.length} drills)`));
+  if (language && pool.configured.length > 0 && !pool.configured.includes(language)) {
+    console.log(
+      pc.yellow(
+        `note: --lang ${language} is outside your configured languages (${pool.configured.join(", ")})` +
+          " - serving it anyway",
+      ),
+    );
+  }
+}
+
+/**
  * The axis most in need of a rep: never-tested first, then stalest. Scoped to
  * `language` when one was asked for, so `--lang java` picks the stalest axis
  * that actually has Java content instead of one that cannot be drilled.
  */
-function dueAxis(store: Store, bank: Exercise[], language?: Language): Axis {
-  const available = availableAxes(bank, language, allGenerators);
+function dueAxis(store: Store, pool: DrillPool, language?: Language): Axis {
+  const available = availableAxes(pool.bank, language, pool.generators, undefined, pool.allowed);
   let best: Axis = available[0] ?? "syntax-recall";
   let bestTime = Infinity;
   for (const a of available) {
@@ -102,14 +188,16 @@ export async function drillOnce(
   flags: DrillFlags,
   opts: { languageMix?: boolean } = {},
 ): Promise<boolean> {
-  const bank = loadBank(bankDirs());
   const language = flags.lang ? parseLang(flags.lang) : undefined;
   const mode = flags.aiOn ? "ai-on" : "ai-off";
 
   let ex: Exercise | undefined;
   if (flags.exercise) {
-    // Replay a specific exercise. Tier is not in the id, so take it from --tier,
-    // else from this exercise's own history, else the family's first tier.
+    // Replay a specific exercise: an explicit id is not a request for a pool, so
+    // neither track focus nor the language allowlist applies to it.
+    const bank = loadBank(bankDirs());
+    // Tier is not in the id, so take it from --tier, else from this exercise's
+    // own history, else the family's first tier.
     let tierHint: number | undefined;
     if (flags.tier !== undefined) {
       const t = Number.parseInt(flags.tier, 10);
@@ -130,21 +218,37 @@ export async function drillOnce(
       return false;
     }
   } else {
-    const axis = flags.axis ? parseAxis(flags.axis) : dueAxis(store, bank, language);
+    const pool = resolvePool(flags);
+    announcePool(pool, language);
+    const axis = flags.axis ? parseAxis(flags.axis) : dueAxis(store, pool, language);
     const recent = store.recentSessions(axis, 6).map((s) => s.exercise_id);
     const pick: SelectOptions = {
-      statics: bank,
-      generators: allGenerators,
+      statics: pool.bank,
+      generators: pool.generators,
       axis,
       rating: store.getRating(axis).rating,
       recentIds: recent,
       language,
+      allowedLanguages: pool.allowed,
     };
     // Language mix soft-cap (spec E1): only when the user is not steering with
     // --lang. Baseline opts out too - it forces per-axis coverage, and its own
     // first drills would otherwise skew the languages of its later ones.
     if (opts.languageMix !== false && language === undefined) {
       pick.recentLanguages = store.recentSessionLanguages(6);
+    }
+    // The allowlist is the user's own choice, so it shrinks the pool quietly - but
+    // never silently: say how much of this axis it costs before the drill starts.
+    if (pool.allowed) {
+      const hiddenLang = hiddenByLanguages(pick, pool.allowed);
+      if (hiddenLang > 0) {
+        console.log(
+          pc.dim(
+            `config limits languages to ${pool.allowed.join(", ")}` +
+              ` - ${hiddenLang} drills hidden on this axis (atrophy setup to change)`,
+          ),
+        );
+      }
     }
     // Selection hides java drills a JVM would have to grade when there is no JDK. For
     // the user who asked for java that must never be silent: it shrinks the pool they
@@ -340,13 +444,26 @@ function exportJson(store: Store, out?: string): void {
 }
 
 export async function baseline(store: Store, flags: DrillFlags): Promise<void> {
-  const bank = loadBank(bankDirs());
+  const pool = resolvePool(flags);
   const language = flags.lang ? parseLang(flags.lang) : undefined;
-  const axesWithExercises = availableAxes(bank, language, allGenerators);
+  const axesWithExercises = availableAxes(pool.bank, language, pool.generators, undefined, pool.allowed);
+  // Both sides run on this host's real toolchains, so an axis a missing JDK hid is
+  // never blamed on the config (that one has its own notice inside the drill).
+  const skipped = availableAxes(pool.unfiltered, language, allGenerators).filter(
+    (a) => !axesWithExercises.includes(a),
+  );
   console.log(
     pc.bold("Baseline session") +
       ` - one unaided drill per axis (${axesWithExercises.length} available today).`,
   );
+  for (const axis of skipped) {
+    console.log(
+      pc.dim(
+        `skipping ${axis}: no drills match your config` +
+          ` (languages: ${pool.allowed ? pool.allowed.join(", ") : "all"}; track: ${pool.track?.name ?? "all"})`,
+      ),
+    );
+  }
   for (const axis of axesWithExercises) {
     const ok = await drillOnce(store, { ...flags, axis }, { languageMix: false });
     if (!ok) break;
@@ -513,12 +630,14 @@ export function buildProgram(): Command {
     .option("--exercise <id>", "replay a specific exercise (bank id or generated family-seed id)")
     .option("--tier <n>", "tier 1-3 for a generated --exercise not in your history")
     .option("--show", "print the exercise without grading (preview)")
+    .option("--track <name>", "pack track name; 'all' disables a configured track for this run")
     .action(drillAction);
 
   program
     .command("baseline")
     .description("initial ~25 min session: one drill per axis, AI off")
     .option("-l, --lang <language>", `one of: ${LANGUAGES.join(", ")}`)
+    .option("--track <name>", "pack track name; 'all' disables a configured track for this run")
     .action(baselineAction);
 
   program
