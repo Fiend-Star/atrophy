@@ -328,15 +328,24 @@ export function parseExercise(json: string, source = "<inline>"): Exercise {
   return result.data;
 }
 
-/** Recursively load every *.json exercise under one or more bank directories. */
-export function loadBank(dirs: string | string[]): Exercise[] {
+/** One loaded exercise plus the `dirs[]` member whose walk found it. */
+export interface BankEntry {
+  exercise: Exercise;
+  root: string;
+}
+
+/**
+ * Recursively load every *.json exercise under one or more bank directories, keeping
+ * which root each came from. `loadBank` is a thin projection of this.
+ */
+export function loadBankDetailed(dirs: string | string[]): BankEntry[] {
   const roots = Array.isArray(dirs) ? dirs : [dirs];
-  const exercises: Exercise[] = [];
+  const entries: BankEntry[] = [];
   const seen = new Map<string, string>(); // id -> resolved path of the file that declared it
-  const walk = (d: string) => {
+  const walk = (d: string, root: string) => {
     for (const entry of readdirSync(d, { withFileTypes: true })) {
       const full = join(d, entry.name);
-      if (entry.isDirectory()) walk(full);
+      if (entry.isDirectory()) walk(full, root);
       else if (entry.isFile() && entry.name.endsWith(".json") && entry.name.toLowerCase() !== "pack.json") {
         const canonical = resolve(full);
         const ex = parseExercise(readFileSync(full, "utf8"), full);
@@ -346,10 +355,15 @@ export function loadBank(dirs: string | string[]): Exercise[] {
         if (first === canonical) continue;
         if (first) throw new BankError(`duplicate exercise id: ${ex.id} (${first} and ${canonical})`);
         seen.set(ex.id, canonical);
-        exercises.push(ex);
+        entries.push({ exercise: ex, root });
       }
     }
   };
-  for (const root of roots) walk(root);
-  return exercises;
+  for (const root of roots) walk(root, root);
+  return entries;
+}
+
+/** Recursively load every *.json exercise under one or more bank directories. */
+export function loadBank(dirs: string | string[]): Exercise[] {
+  return loadBankDetailed(dirs).map((e) => e.exercise);
 }

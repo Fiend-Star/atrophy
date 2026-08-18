@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { BankError, exerciseSchema, isHarness, isSqlWrite, JVM_KINDS, loadBank, parseExercise, totalUnits, type CodeExercise, type HarnessExercise, type RecallExercise } from "./schema.js";
+import { BankError, exerciseSchema, isHarness, isSqlWrite, JVM_KINDS, loadBank, loadBankDetailed, parseExercise, totalUnits, type CodeExercise, type HarnessExercise, type RecallExercise } from "./schema.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 
@@ -356,6 +356,80 @@ describe("loadBank multi-dir", () => {
       expect(loadBank([dir]).map((e) => e.id)).toEqual(["sr-py-001"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("loadBankDetailed", () => {
+  // A minimal recall fixture: no functionName/tests/starterCode to fuss over, just
+  // enough for parseExercise to accept it.
+  const recallFixture = {
+    id: "rec-any-901",
+    kind: "recall",
+    axis: "decomposition",
+    language: "any",
+    tier: 1,
+    title: "t",
+    prompt: "p",
+    softTimeLimitSeconds: 60,
+    acceptedAnswers: ["42"],
+  };
+
+  function tempDir(name: string, ex: object): string {
+    const dir = mkdtempSync(join(tmpdir(), "atrophy-bank-"));
+    writeFileSync(join(dir, name), JSON.stringify(ex), "utf8");
+    return dir;
+  }
+
+  it("attributes each entry to the dirs[] root that found it", () => {
+    const a = tempDir("a.json", recallFixture);
+    const b = tempDir("b.json", { ...recallFixture, id: "rec-any-902" });
+    try {
+      const entries = loadBankDetailed([a, b]);
+      expect(entries.map((e) => ({ id: e.exercise.id, root: e.root })).sort((x, y) => x.id.localeCompare(y.id))).toEqual([
+        { id: "rec-any-901", root: a },
+        { id: "rec-any-902", root: b },
+      ]);
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
+    }
+  });
+
+  it("overlapping roots [a, a] yield exactly one entry, attributed to the first", () => {
+    const a = tempDir("a.json", recallFixture);
+    try {
+      const entries = loadBankDetailed([a, a]);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.exercise.id).toBe("rec-any-901");
+      expect(entries[0]!.root).toBe(a);
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+    }
+  });
+
+  it("still throws BankError on cross-dir duplicate ids", () => {
+    const a = tempDir("a.json", recallFixture);
+    const b = tempDir("b.json", recallFixture);
+    try {
+      expect(() => loadBankDetailed([a, b])).toThrowError(BankError);
+      expect(() => loadBankDetailed([a, b])).toThrowError(/duplicate exercise id: rec-any-901/);
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
+    }
+  });
+
+  it("loadBank still delegates: same ids as loadBankDetailed, unwrapped", () => {
+    const a = tempDir("a.json", recallFixture);
+    const b = tempDir("b.json", { ...recallFixture, id: "rec-any-902" });
+    try {
+      expect(loadBank([a, b]).map((e) => e.id).sort()).toEqual(
+        loadBankDetailed([a, b]).map((e) => e.exercise.id).sort(),
+      );
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
     }
   });
 });
