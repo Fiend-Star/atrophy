@@ -337,7 +337,7 @@ export function loadBank(dirs: string | string[]): Exercise[] {
     for (const entry of readdirSync(d, { withFileTypes: true })) {
       const full = join(d, entry.name);
       if (entry.isDirectory()) walk(full);
-      else if (entry.isFile() && entry.name.endsWith(".json")) {
+      else if (entry.isFile() && entry.name.endsWith(".json") && entry.name.toLowerCase() !== "pack.json") {
         const canonical = resolve(full);
         const ex = parseExercise(readFileSync(full, "utf8"), full);
         const first = seen.get(ex.id);

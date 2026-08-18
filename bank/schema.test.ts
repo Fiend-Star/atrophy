@@ -334,4 +334,28 @@ describe("loadBank multi-dir", () => {
       rmSync(a, { recursive: true, force: true });
     }
   });
+
+  it("skips pack.json (even invalid JSON) instead of parsing it as an exercise", () => {
+    const dir = mkdtempSync(join(tmpdir(), "atrophy-bank-"));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "a.json"), JSON.stringify(valid), "utf8");
+    writeFileSync(join(dir, "pack.json"), "{not json", "utf8");
+    try {
+      expect(loadBank([dir]).map((e) => e.id)).toEqual(["sr-py-001"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips pack.json case-insensitively by basename", () => {
+    const dir = mkdtempSync(join(tmpdir(), "atrophy-bank-"));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "a.json"), JSON.stringify(valid), "utf8");
+    writeFileSync(join(dir, "PACK.JSON"), "{not json", "utf8");
+    try {
+      expect(loadBank([dir]).map((e) => e.id)).toEqual(["sr-py-001"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
