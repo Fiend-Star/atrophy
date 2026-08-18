@@ -169,6 +169,26 @@ atrophy baseline
 | `atrophy serve` | Dashboard at `127.0.0.1:4646` |
 | `atrophy export -o out.json` | Dump all your data as JSON |
 
+## Choose your languages / pick a track
+
+By default every command draws from every language and every pack. `atrophy
+setup` lets you narrow that once, and every later `drill`/`baseline` respects
+it - no flags to remember every time:
+
+```sh
+atrophy setup                         # interactive: pick languages, pick a track
+atrophy setup --languages java,sql    # non-interactive: set the language allowlist directly
+atrophy drill --track aurora          # focus this one run on a single pack, without touching config
+```
+
+Two rules worth knowing: an explicit `--lang` on `drill`/`baseline` always
+wins over the configured allowlist - that's you steering, not the config
+guessing for you - and a track is just a pack, named by its `pack.json` (see
+[Packs](#packs) below) or by its folder name when it has none. Narrowing is
+never silent either way: whatever the allowlist or track focus hides gets
+reported before the drill starts, and `atrophy setup --show` (or `atrophy
+doctor`) shows the same picture on demand.
+
 ## Your data
 
 One SQLite file at `~/.atrophy/atrophy.db`, owned by you. No account, no
