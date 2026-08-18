@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   checkBank,
+  checkConfig,
   checkDb,
   checkEditor,
   checkGrading,
@@ -236,5 +237,68 @@ describe("checkPacks", () => {
     expect(r.status).toBe("fail");
     expect(r.detail).toContain("not found");
     expect(r.detail).not.toContain("ENOENT");
+  });
+});
+
+describe("checkConfig", () => {
+  // Config lives at $ATROPHY_CONFIG, resolved through an injected env - never the
+  // real ~/.atrophy/config.json - and every temp dir is scratch, cleaned up after.
+  let base: string;
+  let configDir: string;
+
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), "atrophy-doc-cfg-base-"));
+    writeFileSync(
+      join(base, "sr-py-001.json"),
+      JSON.stringify({
+        kind: "write",
+        id: "sr-py-001",
+        axis: "syntax-recall",
+        tier: 1,
+        title: "t",
+        prompt: "p",
+        softTimeLimitSeconds: 60,
+        language: "python",
+        functionName: "f",
+        starterCode: "def f():\n    pass\n",
+        tests: [{ args: [], expected: null }],
+      }),
+    );
+    configDir = mkdtempSync(join(tmpdir(), "atrophy-doc-cfg-"));
+  });
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+  });
+
+  /** Writes a throwaway config file under the scratch config dir and returns an injectable env. */
+  function envWithConfig(json: string): NodeJS.ProcessEnv {
+    const file = join(configDir, "config.json");
+    writeFileSync(file, json, "utf8");
+    return { ATROPHY_CONFIG: file };
+  }
+
+  it("reports 'all' for a clean config with no warning", () => {
+    const r = checkConfig(base, [], envWithConfig("{}"));
+    expect(r.status).toBe("pass");
+    expect(r.detail).toContain("languages: all");
+    expect(r.detail).toContain("track: all");
+    // the track table lists what was discovered, even with nothing configured
+    expect(r.detail).toContain("base");
+  });
+
+  it("warns and names the language(s) validation dropped", () => {
+    const r = checkConfig(base, [], envWithConfig(JSON.stringify({ languages: ["java", "cobol"] })));
+    expect(r.status).toBe("warn");
+    expect(r.detail).toContain("cobol");
+    // the valid entry still shows up in the normal languages line
+    expect(r.detail).toContain("java");
+  });
+
+  it("warns and lists the discovered tracks when the configured track matches none", () => {
+    const r = checkConfig(base, [], envWithConfig(JSON.stringify({ track: "nope" })));
+    expect(r.status).toBe("warn");
+    expect(r.detail).toContain("nope");
+    expect(r.detail).toContain("base");
   });
 });

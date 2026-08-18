@@ -5,11 +5,13 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pc from "picocolors";
-import { loadBank, type Axis, type CodeExercise, type Language } from "../bank/schema.js";
+import { loadBank, loadBankDetailed, type Axis, type CodeExercise, type Language } from "../bank/schema.js";
 import { grade, pythonCommand, solutionFileName } from "../engine/grader.js";
 import { MIN_JDK_MAJOR, javacCommand, missingJdkHint, parseJavaMajor } from "../engine/javatool.js";
 import { Store } from "../store/db.js";
+import { configLanguages, configTrack, readConfig } from "./config.js";
 import { DEFAULT_LEADERBOARD_URL, syncDisabled } from "./publish.js";
+import { ambiguousTracks, resolveTracks } from "./tracks.js";
 
 /**
  * `atrophy doctor`: environment self-diagnosis. Each check is small and
@@ -258,6 +260,76 @@ export function checkPacks(dirs: string[]): CheckResult {
   return { name: "Packs", status: "pass", detail: parts.join(" · ") };
 }
 
+/**
+ * The language allowlist and track focus read from config (`~/.atrophy/config.json`
+ * or `$ATROPHY_CONFIG`), plus every track discovered under `base` + `packs` and how
+ * many drills each holds. Warn, never fail - like `checkSql`, there is nothing here
+ * a user needs to go install; a stale or typo'd config is fixed by editing it (or
+ * running the setup flow), not by treating doctor as red.
+ *
+ * `base` and `packs` are explicit parameters rather than a `bankRoots()` import: that
+ * helper lives in cli/index.ts, which already imports from this file, and importing
+ * it back here would create a cycle. The caller resolves roots the same way
+ * `doctorAction` resolves `bankDir`/`packDirs` today and hands them in - mirroring how
+ * `checkBank`/`checkPacks` take their directories as parameters instead of finding
+ * them themselves.
+ */
+export function checkConfig(base: string, packs: string[], env: NodeJS.ProcessEnv = process.env): CheckResult {
+  const name = "Config";
+  try {
+    const tracks = resolveTracks(base, packs);
+    const ambiguous = new Set(ambiguousTracks(tracks));
+    const counts = new Map<string, number>();
+    for (const t of tracks) counts.set(t.dir, 0);
+    for (const entry of loadBankDetailed([base, ...packs])) {
+      counts.set(entry.root, (counts.get(entry.root) ?? 0) + 1);
+    }
+
+    let warned = false;
+
+    // languages: validation silently drops unknown entries - name what it dropped
+    const configuredLanguages = configLanguages(env);
+    let languagesLine =
+      configuredLanguages.length === 0 ? "languages: all" : `languages: ${configuredLanguages.join(", ")}`;
+    const rawLanguages = readConfig(env).languages;
+    if (Array.isArray(rawLanguages)) {
+      const known = new Set<string>(configuredLanguages);
+      const dropped = rawLanguages
+        .filter((l) => !(typeof l === "string" && known.has(l)))
+        .map((l) => String(l));
+      if (dropped.length > 0) {
+        warned = true;
+        languagesLine += ` - config lists unknown languages: ${dropped.join(", ")}`;
+      }
+    }
+
+    // track: undefined means "all"; otherwise it must resolve to exactly one discovered track
+    const wanted = configTrack(env);
+    let trackLine: string;
+    if (wanted === undefined) {
+      trackLine = "track: all";
+    } else if (ambiguous.has(wanted)) {
+      warned = true;
+      const dirs = tracks.filter((t) => t.name === wanted).map((t) => t.dir);
+      trackLine = `track: ${wanted} - ambiguous: ${dirs.join(", ")} (rename one via pack.json)`;
+    } else {
+      const match = tracks.find((t) => t.name === wanted);
+      if (!match) {
+        warned = true;
+        trackLine = `track: ${wanted} - matches no discovered track (found: ${tracks.map((t) => t.name).join(", ")})`;
+      } else {
+        trackLine = `track: ${match.name} (${counts.get(match.dir) ?? 0} drills)`;
+      }
+    }
+
+    const table = tracks.map((t) => `${t.name}  ${counts.get(t.dir) ?? 0} drills  ${t.dir}`).join("\n");
+    const detail = `${languagesLine}\n${trackLine}\n${table}`;
+    return { name, status: warned ? "warn" : "pass", detail };
+  } catch (err) {
+    return { name, status: "warn", detail: `config check failed: ${(err as Error).message}` };
+  }
+}
+
 /** End-to-end sandbox check: grade a trivial correct solution in a subprocess. */
 export async function checkGrading(): Promise<CheckResult> {
   const probe: CodeExercise = {
@@ -327,6 +399,14 @@ export interface DoctorDeps {
   bankError?: string | null;
   packDirs: string[];
   dbPath: string;
+  /**
+   * The built-in bank root (`bankRoots().base`), separate from `bankDir`'s flattened
+   * base+packs list - `checkConfig` needs it to resolve tracks. Optional so an existing
+   * caller that has not been updated to pass it (see `checkConfig`'s doc comment on why
+   * this file cannot import `bankRoots` itself) still type-checks; the config check is
+   * simply omitted from the report until a caller supplies it.
+   */
+  base?: string;
 }
 
 /** Run every check, print the report, return a process exit code (0 or 1). */
@@ -344,6 +424,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     await checkGrading(),
     await checkLeaderboard(),
   ];
+  if (deps.base !== undefined) results.push(checkConfig(deps.base, deps.packDirs));
   for (const r of results) printResult(r);
 
   const fails = results.filter((r) => r.status === "fail").length;
