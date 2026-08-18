@@ -34,6 +34,7 @@ import {
 import { Store, defaultDbPath } from "../store/db.js";
 import { hiddenJavaNotice, runDoctor } from "./doctor.js";
 import { reportCommand } from "./report.js";
+import { setupAction } from "./setup.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -692,6 +693,15 @@ export function buildProgram(): Command {
     .description("a shareable summary of your baseline (Markdown, or an SVG card with --out *.svg)")
     .option("-o, --out <file>", "write to a file (.svg renders a card, otherwise Markdown)")
     .action(reportAction);
+
+  program
+    .command("setup")
+    .description("choose your languages and prep track (saved; every command respects it)")
+    .option("--languages <csv>", `comma list of: ${LANGUAGES.join(", ")}`)
+    .option("--all-languages", "serve all languages (clear the allowlist)")
+    .option("--track <name>", "focus one pack ('all' to clear)")
+    .option("--show", "print current setup and discovered tracks, change nothing")
+    .action(setupAction);
 
   return program;
 }
