@@ -34,7 +34,7 @@ import {
 import { Store, defaultDbPath } from "../store/db.js";
 import { hiddenJavaNotice, runDoctor } from "./doctor.js";
 import { reportCommand } from "./report.js";
-import { setupAction } from "./setup.js";
+import { setupAction, type SetupFlags } from "./setup.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -553,8 +553,11 @@ export async function doctorAction(): Promise<void> {
   // config it reads - resolve each input defensively so the report prints.
   let bankDir: string[] | null = null;
   let bankError: string | null = null;
+  let base: string | undefined;
   try {
-    bankDir = bankDirs();
+    const roots = bankRoots();
+    base = roots.base;
+    bankDir = [roots.base, ...roots.packs];
   } catch (err) {
     bankError = (err as Error).message;
   }
@@ -564,7 +567,7 @@ export async function doctorAction(): Promise<void> {
   } catch {
     /* whatever broke here already surfaced as bankError */
   }
-  process.exitCode = await runDoctor({ bankDir, bankError, packDirs: packs, dbPath: defaultDbPath() });
+  process.exitCode = await runDoctor({ bankDir, bankError, packDirs: packs, dbPath: defaultDbPath(), base });
 }
 
 export async function backupAction(flags: { out?: string }): Promise<void> {
@@ -701,7 +704,7 @@ export function buildProgram(): Command {
     .option("--all-languages", "serve all languages (clear the allowlist)")
     .option("--track <name>", "focus one pack ('all' to clear)")
     .option("--show", "print current setup and discovered tracks, change nothing")
-    .action(setupAction);
+    .action((flags: SetupFlags) => setupAction(flags, { roots: bankRoots }));
 
   return program;
 }

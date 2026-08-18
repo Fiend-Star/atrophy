@@ -2,7 +2,6 @@ import { createInterface } from "node:readline/promises";
 import pc from "picocolors";
 import { LANGUAGES, loadBankDetailed, type Language } from "../bank/schema.js";
 import { configPath, configLanguages, configTrack, readConfig, writeConfig } from "./config.js";
-import { bankRoots } from "./index.js";
 import { ambiguousTracks, findTrack, resolveTracks, type Track } from "./tracks.js";
 
 export interface SetupFlags {
@@ -22,6 +21,17 @@ export interface SetupIO {
   close(): void;
 }
 
+/**
+ * What `setupAction` needs from the outside world. `roots` is injected rather than
+ * imported from `cli/index.ts` (which imports `setupAction`) - the same seam
+ * `doctor.ts`'s `checkConfig` uses for `base`/`packs`, for the same reason: importing
+ * `bankRoots` back from here would create a cycle.
+ */
+export interface SetupDeps {
+  roots(): { base: string; packs: string[] };
+  io?: SetupIO;
+}
+
 function defaultIo(): SetupIO {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   return {
@@ -37,8 +47,8 @@ interface Discovered {
 }
 
 /** Base + every configured pack, and how many drills `loadBankDetailed` found under each. */
-function discoverTracks(): Discovered {
-  const { base, packs } = bankRoots();
+function discoverTracks(roots: { base: string; packs: string[] }): Discovered {
+  const { base, packs } = roots;
   const tracks = resolveTracks(base, packs);
   const entries = loadBankDetailed([base, ...packs]);
   const counts = new Map<string, number>(tracks.map((t) => [t.dir, 0]));
@@ -182,8 +192,8 @@ async function runInteractive(io: SetupIO, discovered: Discovered): Promise<void
   printState(discovered);
 }
 
-export async function setupAction(flags: SetupFlags, io?: SetupIO): Promise<void> {
-  const discovered = discoverTracks();
+export async function setupAction(flags: SetupFlags, deps: SetupDeps): Promise<void> {
+  const discovered = discoverTracks(deps.roots());
 
   if (flags.show) {
     printState(discovered);
@@ -196,7 +206,7 @@ export async function setupAction(flags: SetupFlags, io?: SetupIO): Promise<void
     return;
   }
 
-  const activeIo = io ?? defaultIo();
+  const activeIo = deps.io ?? defaultIo();
   try {
     await runInteractive(activeIo, discovered);
   } finally {

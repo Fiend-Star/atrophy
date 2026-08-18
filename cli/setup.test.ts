@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AtrophyConfig } from "./config.js";
 import { readConfig } from "./config.js";
-import { setupAction, type SetupIO } from "./setup.js";
+import { setupAction, type SetupDeps, type SetupIO } from "./setup.js";
 
 /** A minimal `recall` exercise: no toolchain, nothing to grade, cheapest way to seed a track. */
 function recall(id: string, answer: string) {
@@ -26,6 +26,8 @@ const ENV_KEYS = ["ATROPHY_CONFIG", "ATROPHY_BANK", "ATROPHY_PACKS"] as const;
 const strip = (s: string): string => s.replace(/\[[0-9;]*m/g, "");
 
 let root: string;
+let bankDir: string;
+let packDir: string;
 let saved: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>>;
 let logged: string[];
 let errored: string[];
@@ -35,11 +37,19 @@ function writeCfg(config: AtrophyConfig): void {
   writeFileSync(process.env.ATROPHY_CONFIG!, JSON.stringify(config), "utf8");
 }
 
+/**
+ * Scratch roots injected explicitly, the way `cli/index.ts` injects the real
+ * `bankRoots` - `setupAction` takes no import of its own to discover them.
+ */
+function deps(io?: SetupIO): SetupDeps {
+  return { roots: () => ({ base: bankDir, packs: [packDir] }), io };
+}
+
 beforeEach(() => {
   saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
   root = mkdtempSync(join(tmpdir(), "atrophy-setup-"));
-  const bankDir = join(root, "bank");
-  const packDir = join(root, "pack");
+  bankDir = join(root, "bank");
+  packDir = join(root, "pack");
   mkdirSync(bankDir, { recursive: true });
   mkdirSync(packDir, { recursive: true });
   writeFileSync(join(bankDir, "sr-py-001.json"), JSON.stringify(recall("sr-py-001", "a")), "utf8");
@@ -74,13 +84,13 @@ afterEach(() => {
 
 describe("setupAction: flags (non-interactive)", () => {
   it("sets languages, deduped, in first-seen order", async () => {
-    await setupAction({ languages: "python,python,java" });
+    await setupAction({ languages: "python,python,java" }, deps());
     expect(readConfig().languages).toEqual(["python", "java"]);
   });
 
   it("rejects an unknown language entry and writes nothing", async () => {
     writeCfg({ languages: ["python"] });
-    await setupAction({ languages: "java,cobol" });
+    await setupAction({ languages: "java,cobol" }, deps());
 
     expect(errored.some((l) => l.includes('unknown language "cobol"'))).toBe(true);
     expect(process.exitCode).toBe(1);
@@ -89,23 +99,23 @@ describe("setupAction: flags (non-interactive)", () => {
 
   it("--all-languages clears a previously set allowlist", async () => {
     writeCfg({ languages: ["python", "java"] });
-    await setupAction({ allLanguages: true });
+    await setupAction({ allLanguages: true }, deps());
     expect(readConfig().languages).toBeUndefined();
     expect("languages" in readConfig()).toBe(false);
   });
 
   it("--track <name> sets it; --track all clears it", async () => {
-    await setupAction({ track: "tpack" });
+    await setupAction({ track: "tpack" }, deps());
     expect(readConfig().track).toBe("tpack");
 
-    await setupAction({ track: "all" });
+    await setupAction({ track: "all" }, deps());
     expect(readConfig().track).toBeUndefined();
     expect("track" in readConfig()).toBe(false);
   });
 
   it("an unknown track name is a friendly error listing discovered names; nothing written", async () => {
     writeCfg({ track: "tpack" });
-    await setupAction({ track: "nope" });
+    await setupAction({ track: "nope" }, deps());
 
     const msg = errored.find((l) => l.includes('unknown track "nope"'));
     expect(msg).toBeDefined();
@@ -119,7 +129,7 @@ describe("setupAction: flags (non-interactive)", () => {
     writeCfg({ languages: ["sql"], track: "tpack" });
     const before = readConfig();
 
-    await setupAction({ show: true });
+    await setupAction({ show: true }, deps());
 
     expect(readConfig()).toEqual(before);
     expect(logged.some((l) => l.includes("sql"))).toBe(true);
@@ -129,7 +139,7 @@ describe("setupAction: flags (non-interactive)", () => {
 
   it("preserves unrelated config keys (leaderboard) on write", async () => {
     writeCfg({ leaderboard: { handle: "gurm" } });
-    await setupAction({ languages: "python" });
+    await setupAction({ languages: "python" }, deps());
 
     const cfg = readConfig();
     expect(cfg.leaderboard).toEqual({ handle: "gurm" });
@@ -150,7 +160,7 @@ describe("setupAction: interactive (no flags)", () => {
     // LANGUAGES = python, javascript, java, sql -> "1,3" = python, java.
     // tracks = [base, tpack] -> "2" = tpack.
     const io = stub(["1,3", "2"]);
-    await setupAction({}, io);
+    await setupAction({}, deps(io));
 
     const cfg = readConfig();
     expect(cfg.languages).toEqual(["python", "java"]);
@@ -160,7 +170,7 @@ describe("setupAction: interactive (no flags)", () => {
   it("empty language answer and 0 track answer both clear (mean 'all')", async () => {
     writeCfg({ languages: ["python"], track: "tpack" });
     const io = stub(["", "0"]);
-    await setupAction({}, io);
+    await setupAction({}, deps(io));
 
     const cfg = readConfig();
     expect(cfg.languages).toBeUndefined();
@@ -175,14 +185,14 @@ describe("setupAction: interactive (no flags)", () => {
         closed = true;
       },
     };
-    await setupAction({}, io);
+    await setupAction({}, deps(io));
     expect(closed).toBe(true);
   });
 
   it("is only entered when no flags are given at all", async () => {
     // Any single flag must short-circuit interactive mode even with io injected.
     const io = stub(["1,3", "2"]);
-    await setupAction({ track: "all" }, io);
+    await setupAction({ track: "all" }, deps(io));
     // the scripted answers were never consumed
     expect(readConfig().languages).toBeUndefined();
   });

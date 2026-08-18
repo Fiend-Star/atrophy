@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   checkBank,
   checkConfig,
@@ -14,6 +14,7 @@ import {
   checkSql,
   hiddenJavaNotice,
   javaCheckResult,
+  runDoctor,
 } from "./doctor.js";
 
 describe("checkNode", () => {
@@ -333,6 +334,59 @@ describe("checkConfig", () => {
     } finally {
       rmSync(packA, { recursive: true, force: true });
       rmSync(packB, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("runDoctor", () => {
+  it("renders the config section when the caller supplies base", async () => {
+    const base = mkdtempSync(join(tmpdir(), "atrophy-doc-run-base-"));
+    const dbDir = mkdtempSync(join(tmpdir(), "atrophy-doc-run-db-"));
+    const configDir = mkdtempSync(join(tmpdir(), "atrophy-doc-run-cfg-"));
+    writeFileSync(
+      join(base, "sr-py-001.json"),
+      JSON.stringify({
+        kind: "write",
+        id: "sr-py-001",
+        axis: "syntax-recall",
+        tier: 1,
+        title: "t",
+        prompt: "p",
+        softTimeLimitSeconds: 60,
+        language: "python",
+        functionName: "f",
+        starterCode: "def f():\n    pass\n",
+        tests: [{ args: [], expected: null }],
+      }),
+    );
+    const savedNoSync = process.env.ATROPHY_NO_SYNC;
+    const savedConfig = process.env.ATROPHY_CONFIG;
+    // scratch, never the developer's real ~/.atrophy/config.json; ATROPHY_NO_SYNC keeps
+    // checkLeaderboard from making a real network call during the test
+    process.env.ATROPHY_NO_SYNC = "1";
+    process.env.ATROPHY_CONFIG = join(configDir, "config.json");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const code = await runDoctor({
+        bankDir: [base],
+        packDirs: [],
+        dbPath: join(dbDir, "t.db"),
+        base,
+      });
+      expect(code).toBe(0);
+      const printed = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(printed).toContain("Config");
+      expect(printed).toContain("languages: all");
+      expect(printed).toContain("track: all");
+    } finally {
+      logSpy.mockRestore();
+      if (savedNoSync === undefined) delete process.env.ATROPHY_NO_SYNC;
+      else process.env.ATROPHY_NO_SYNC = savedNoSync;
+      if (savedConfig === undefined) delete process.env.ATROPHY_CONFIG;
+      else process.env.ATROPHY_CONFIG = savedConfig;
+      rmSync(base, { recursive: true, force: true });
+      rmSync(dbDir, { recursive: true, force: true });
+      rmSync(configDir, { recursive: true, force: true });
     }
   });
 });
