@@ -172,12 +172,18 @@ function parseLanguagePicks(answer: string): PickResult<Language[] | undefined> 
   return { valid: true, value: [...new Set(langs)] };
 }
 
-/** `0` or blank means "all"; a positive index past the end of `tracks` is invalid, not "all". */
+/**
+ * `0` or blank means "all"; a positive index past the end of `tracks` is invalid, not "all".
+ * The literal-"0"/blank fast path is the ONLY route to "all" - anything else that merely
+ * parses to zero ("00", "-0", "0.0") falls through to the bound check below, which must
+ * reject n <= 0 (not just n < 0): `tracks[-1]` is `undefined`, and `undefined.name` would
+ * throw instead of re-prompting.
+ */
 function parseTrackPick(answer: string, tracks: Track[]): PickResult<string | undefined> {
   const trimmed = answer.trim();
   if (trimmed.length === 0 || trimmed === "0") return { valid: true, value: undefined };
   const n = Number.parseInt(trimmed, 10);
-  if (!Number.isInteger(n) || n < 0 || n > tracks.length) return { valid: false };
+  if (!Number.isInteger(n) || n <= 0 || n > tracks.length) return { valid: false };
   return { valid: true, value: tracks[n - 1]!.name };
 }
 

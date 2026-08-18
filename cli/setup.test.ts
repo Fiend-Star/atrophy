@@ -219,6 +219,27 @@ describe("setupAction: interactive (no flags)", () => {
     expect(logged.some((l) => l.toLowerCase().includes("invalid"))).toBe(true);
   });
 
+  it("re-prompts (does not crash) on a zero-valued track pick that isn't the literal '0'", async () => {
+    // "00" parses to n=0 but must NOT take the "0"-literal fast path to "all" - tracks[-1] is
+    // undefined, and treating it as a valid index would throw reading .name off undefined.
+    const io = stub(["", "00", "2"]);
+    await setupAction({}, deps(io));
+
+    const cfg = readConfig();
+    expect(cfg.languages).toBeUndefined();
+    expect(cfg.track).toBe("tpack");
+    expect(logged.some((l) => l.toLowerCase().includes("invalid"))).toBe(true);
+  });
+
+  it("also re-prompts on other zero-valued, non-literal-'0' track answers", async () => {
+    const io = stub(["", "-0", "0.0", "0"]);
+    await setupAction({}, deps(io));
+
+    const cfg = readConfig();
+    expect(cfg.languages).toBeUndefined();
+    expect(cfg.track).toBeUndefined();
+  });
+
   it("refuses to persist an ambiguous track pick and re-prompts", async () => {
     const packDir2 = join(root, "pack2");
     mkdirSync(packDir2, { recursive: true });
