@@ -69,8 +69,12 @@ const SHELL_SOLUTION_FILE = "solution.sh";
  * The rules exist because a case's `files` are staged by Node into that case's own
  * directory, and the same drill has to stage the same tree on every host the project
  * grades on - both CI legs included.
+ *
+ * Exported because `gradeShell` re-asserts it while staging: parsing is the only door an
+ * exercise *should* come through, and a second copy of these rules in the grader could
+ * drift from the ones an author was checked against.
  */
-function stagedFileKeyProblem(key: string): string | undefined {
+export function stagedFileKeyProblem(key: string): string | undefined {
   if (key.length === 0) return "must not be empty";
   // `path.join` treats "\" as a separator only on win32, so "logs\app.log" would stage a
   // nested file on Windows and one oddly-named file on Linux: the same drill graded
