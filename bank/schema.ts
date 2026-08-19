@@ -54,16 +54,42 @@ export function canonicalRows(rows: readonly Record<string, unknown>[]): string 
 }
 
 /**
- * Where a staged file may land: inside the case's own scratch dir, and nowhere else. An
- * absolute key (leading separator, drive letter, UNC) or a `..` segment would write
- * outside it, so both are parse errors rather than grade-time surprises. An empty segment
- * is not a file name either - "logs/" names a directory, and "a//b" is a typo.
+ * The file a shell drill's submitted script is staged as. Mirrored from
+ * `solutionFileName` in engine/grader.ts rather than imported: data flows bank -> engine,
+ * and the grader already imports this module, so reaching back would be a cycle. If that
+ * map ever renames the shell arm, this moves with it.
  */
-function isStagedFileKey(key: string): boolean {
-  if (key.length === 0) return false;
-  if (key.startsWith("/") || key.startsWith("\\")) return false;
-  if (/^[a-zA-Z]:/.test(key)) return false;
-  return key.split(/[/\\]/).every((segment) => segment.length > 0 && segment !== "..");
+const SHELL_SOLUTION_FILE = "solution.sh";
+
+/**
+ * Why a staged-file key is unusable, or undefined when it is fine. Each rule reports
+ * itself: one parenthetical listing every rule tells an author who wrote "logs/" about
+ * drive letters they did not use.
+ *
+ * The rules exist because a case's `files` are staged by Node into that case's own
+ * directory, and the same drill has to stage the same tree on every host the project
+ * grades on - both CI legs included.
+ */
+function stagedFileKeyProblem(key: string): string | undefined {
+  if (key.length === 0) return "must not be empty";
+  // `path.join` treats "\" as a separator only on win32, so "logs\app.log" would stage a
+  // nested file on Windows and one oddly-named file on Linux: the same drill graded
+  // against two different trees. "/" is the one portable spelling.
+  if (key.includes("\\")) return 'must use "/" as its path separator, never "\\"';
+  if (key.startsWith("/")) return "must be relative, not rooted at /";
+  if (/^[a-zA-Z]:/.test(key)) return "must be relative, not a drive-letter path";
+  for (const segment of key.split("/")) {
+    if (segment.length === 0) return 'must not have an empty path segment (a trailing "/" names a directory)';
+    // join(dir, ".") is the directory itself, and writeFileSync on it is EISDIR.
+    if (segment === ".") return 'must not contain a "." segment';
+    if (segment === "..") return 'must not contain a ".." segment - a case cannot write outside its own directory';
+  }
+  // Compared case-insensitively: a Windows filesystem would let "Solution.SH" clobber the
+  // script while Linux would keep both, which is the same cross-host split as "\" above.
+  // The stager writes `files` first and copies the script over them, so the collision is
+  // silent - the fixture vanishes and the drill fails for a reason nothing names.
+  if (key.toLowerCase() === SHELL_SOLUTION_FILE) return "collides with the staged solution file";
+  return undefined;
 }
 
 /**
@@ -84,12 +110,8 @@ export const shellCaseSchema = z
   })
   .superRefine((c, ctx) => {
     for (const key of Object.keys(c.files ?? {})) {
-      if (isStagedFileKey(key)) continue;
-      ctx.addIssue({
-        code: "custom",
-        path: ["files", key],
-        message: `files key "${key}" must be a relative path inside the case directory (no leading separator, drive letter, or "..")`,
-      });
+      const problem = stagedFileKeyProblem(key);
+      if (problem) ctx.addIssue({ code: "custom", path: ["files", key], message: `files key "${key}" ${problem}` });
     }
   });
 export type ShellCase = z.infer<typeof shellCaseSchema>;

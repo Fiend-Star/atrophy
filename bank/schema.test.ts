@@ -217,8 +217,16 @@ describe("sql write shape", () => {
     expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "sql", starterCode: "-- q", cases: sqlCases, tests: [{ args: [], expected: 1 }] })).toThrow();
   });
   it("rejects sql write with < 2 cases or all-identical expectedRows", () => {
-    expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "sql", starterCode: "-- q", cases: [sqlCases[0]] })).toThrow();
-    expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "sql", starterCode: "-- q", cases: [sqlCases[0], sqlCases[0]] })).toThrow();
+    // A bare .toThrow() is not evidence for `.min(2)`: the refinement below fires on a
+    // one-element array too (one distinct row set < 2), so the assertion would stay green
+    // with the arity rule deleted. Pin zod's own arity issue instead.
+    const one = exerciseSchema.safeParse({ ...base, kind: "write", language: "sql", starterCode: "-- q", cases: [sqlCases[0]] });
+    if (one.success) throw new Error("a one-case sql write must not parse");
+    expect(one.error.issues).toContainEqual(
+      expect.objectContaining({ code: "too_small", minimum: 2, path: ["cases"] }),
+    );
+    expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "sql", starterCode: "-- q", cases: [sqlCases[0], sqlCases[0]] }))
+      .toThrow(/must expect different rows/);
   });
   it("rejects non-sql write with cases/ordered, and keeps today's contract intact", () => {
     expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "python", functionName: "f", starterCode: "def f(): pass", tests: [{ args: [], expected: 1 }], cases: sqlCases })).toThrow();
@@ -293,11 +301,24 @@ describe("shell write shape", () => {
     expect(() => exerciseSchema.parse(shellWrite({ functionName: "f" }))).toThrow(/no function to call/);
     expect(() => exerciseSchema.parse(shellWrite({ cases: sqlCases }))).toThrow(/cases is sql-only/);
     expect(() => exerciseSchema.parse(shellWrite({ ordered: true }))).toThrow(/ordered is sql-only/);
-    expect(() => exerciseSchema.parse(shellWrite({ shellCases: undefined }))).toThrow(/shellCases/);
   });
 
-  it("rejects shell write with < 2 cases or an undiscriminating expectation pair", () => {
-    expect(() => exerciseSchema.parse(shellWrite({ shellCases: [shellCases[0]] }))).toThrow();
+  it("requires shellCases, and at least two of them", () => {
+    // The exact string, not /shellCases/: that would also match "shellCases is shell-only",
+    // the rule for the opposite mistake.
+    expect(() => exerciseSchema.parse(shellWrite({ shellCases: undefined })))
+      .toThrow("shell exercises are graded by shellCases, which is required");
+    // A bare .toThrow() is not evidence for `.min(2)`: the discrimination rule below fires
+    // on a one-element array too (one distinct expectation < 2), so the assertion would
+    // stay green with the arity rule deleted. Pin zod's own arity issue instead.
+    const one = exerciseSchema.safeParse(shellWrite({ shellCases: [shellCases[0]] }));
+    if (one.success) throw new Error("a one-case shell write must not parse");
+    expect(one.error.issues).toContainEqual(
+      expect.objectContaining({ code: "too_small", minimum: 2, path: ["shellCases"] }),
+    );
+  });
+
+  it("rejects shell cases whose expectations do not discriminate", () => {
     // Same stdout and same exit status twice is one case: `echo` of a literal passes both.
     expect(() => exerciseSchema.parse(shellWrite({ shellCases: [shellCases[0], shellCases[0]] })))
       .toThrow(/must differ in expected stdout or exit code/);
@@ -311,18 +332,57 @@ describe("shell write shape", () => {
     }))).toThrow(/must differ in expected stdout or exit code/);
   });
 
-  it("rejects a files key that could escape the case directory", () => {
-    for (const key of ["/etc/passwd", "C:\\tmp\\x", "\\\\host\\share\\x", "../outside.txt", "a/../../b.txt", "logs/", ""]) {
-      expect(
-        () => exerciseSchema.parse(shellWrite({ shellCases: [{ ...shellCases[0], files: { [key]: "x" } }, shellCases[1]] })),
-        `files key ${JSON.stringify(key)} must not parse`,
-      ).toThrow(/relative path inside the case directory/);
+  it("rejects an unusable files key, naming the rule that rejected it", () => {
+    // Read the issue rather than the thrown ZodError's message: the latter is a JSON dump
+    // in which every quote inside a message is backslash-escaped, so a regex written the
+    // way the rule reads would never match.
+    const rejection = (key: string): string => {
+      const parsed = exerciseSchema.safeParse(
+        shellWrite({ shellCases: [{ ...shellCases[0], files: { [key]: "x" } }, shellCases[1]] }),
+      );
+      if (parsed.success) throw new Error(`files key ${JSON.stringify(key)} must not parse`);
+      return parsed.error.issues.map((i) => i.message).join("; ");
+    };
+    // Each key is paired with the rule it must trip: one shared "bad path" message would
+    // tell an author who wrote "logs/" about drive letters they never used.
+    const rejected: [key: string, message: RegExp][] = [
+      ["", /must not be empty/],
+      ["/etc/passwd", /must be relative, not rooted at \//],
+      // Forward slashes, so the backslash rule below does not shadow the drive-letter one.
+      ["C:/tmp/x", /must be relative, not a drive-letter path/],
+      ["C:\\tmp\\x", /must use "\/" as its path separator/],
+      // A backslash never reaches the segment rules: path.join splits on it only on
+      // win32, so "logs\app.log" would stage a nested file on Windows and one
+      // oddly-named file on Linux - the same drill against two different trees.
+      ["logs\\app.log", /must use "\/" as its path separator/],
+      ["\\\\host\\share\\x", /must use "\/" as its path separator/],
+      ["../outside.txt", /must not contain a "\.\." segment/],
+      ["a/../../b.txt", /must not contain a "\.\." segment/],
+      [".", /must not contain a "\." segment/],
+      ["a/./b.txt", /must not contain a "\." segment/],
+      ["logs/", /must not have an empty path segment/],
+      ["a//b.txt", /must not have an empty path segment/],
+      // The stager writes files first, then copies the script over them, so this fixture
+      // would vanish silently. Case-insensitive, because a Windows filesystem is.
+      ["solution.sh", /collides with the staged solution file/],
+      ["Solution.SH", /collides with the staged solution file/],
+    ];
+    for (const [key, message] of rejected) {
+      expect(rejection(key), `files key ${JSON.stringify(key)}`).toMatch(message);
+      // The key itself is always named, so the author knows which entry to fix.
+      expect(rejection(key), `files key ${JSON.stringify(key)}`).toContain(`files key "${key}"`);
     }
-    // A nested relative path is the normal case and must still parse.
-    const ok = exerciseSchema.parse(shellWrite({
-      shellCases: [{ ...shellCases[0], files: { "logs/app.log": "x" } }, shellCases[1]],
-    }));
-    expect(isShellWrite(ok)).toBe(true);
+  });
+
+  it("accepts the relative keys a fixture actually needs", () => {
+    // Nested paths are valid - the stager creates parent directories - and a name that
+    // merely contains the solution file's name is not the collision.
+    for (const key of ["log.txt", "logs/app.log", "a/b/c/deep.txt", "my-solution.sh", "logs/solution.sh"]) {
+      const ex = exerciseSchema.parse(shellWrite({
+        shellCases: [{ ...shellCases[0], files: { [key]: "x" } }, shellCases[1]],
+      }));
+      expect(isShellWrite(ex), `files key ${JSON.stringify(key)} must parse`).toBe(true);
+    }
   });
 
   it("rejects shellCases off shell", () => {
