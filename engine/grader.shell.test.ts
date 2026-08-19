@@ -371,6 +371,51 @@ describe.skipIf(!hasBash())("shell grading - broken toolchain is never a score",
     expect(r.passed).toBe(0);
     expect(r.failures[0]?.error).toContain("case 1:");
   });
+
+  it("a failing case that lost a pinned tool voids the attempt", async () => {
+    // A bogus (non-empty) PATH is the needle: an *empty* one makes bash say "No such
+    // file or directory" instead. This is P2's shape - the tool is gone, the case
+    // cannot pass, and nothing about that is evidence about the user.
+    const r = await grade(topThree, solve(topThree, "PATH=/nonexistent sort in.txt\n"));
+    expect(r.harnessError).toBeDefined();
+    expect(r.harnessError).toContain("sort");
+    expect(r.passed).toBe(0);
+    expect(r.failures).toEqual([]);
+  });
+
+  it("...but a case that passed is never voided by noise on its stderr", async () => {
+    // The answer is right; the script merely made a mess on the way. Voiding here would
+    // record nothing at all on the --solution path - a correct answer thrown away.
+    const noisy = `PATH=/nonexistent sort /dev/null\n${REFERENCE}`;
+    const r = await grade(topThree, solve(topThree, noisy));
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(2);
+  });
+});
+
+describe.skipIf(!hasBash())("shell grading - HOME", () => {
+  const homeDrill = shellExercise({
+    ...base,
+    id: "sr-sh-909",
+    title: "write home",
+    prompt: "write $1 to a file under ~ and read it back",
+    shellCases: [
+      { args: ["alpha"], expectedStdout: "alpha" },
+      { args: ["beta"], expectedStdout: "beta" },
+    ],
+  });
+
+  it("~ is the case's own directory, not the user's home", async () => {
+    const d = solve(homeDrill, 'printf "%s\\n" "$1" > ~/out.txt\ncat ~/out.txt\n');
+    const r = await grade(homeDrill, d);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(2);
+    // Where the write landed is the point: unpinned, `~` is the user's real home on
+    // Windows and empty under glibc - the same script writing outside the scratch dir
+    // on one host and failing on the other.
+    expect(readFileSync(join(d, "case-1", "out.txt"), "utf8").trim()).toBe("alpha");
+    expect(readFileSync(join(d, "case-2", "out.txt"), "utf8").trim()).toBe("beta");
+  });
 });
 
 describe.skipIf(!hasBash())("shell grading - the pinned environment", () => {
@@ -407,19 +452,31 @@ describe.skipIf(!hasBash())("shell grading - the pinned environment", () => {
 });
 
 describe.skipIf(!hasBash())("shellOutputTruncated - mirrored from the runner", () => {
-  it("agrees with what the runner actually caps", async () => {
-    // The cap lives in runner.ts as a private constant; this is what keeps the
-    // mirror honest. 2^19 characters is comfortably past it.
+  // The runner's cap is a private constant, so these two restate it independently of the
+  // mirror under test - deriving the sizes from the exported helper's own number would
+  // make the pair drift along with any change instead of catching it.
+  /** Print `2^n - drop` characters from bash builtins alone, and hand back what survived. */
+  async function capture(n: number, drop: 0 | 1): Promise<string> {
     const bash = bashCommand()!;
     const d = mkdtempSync(join(tmpdir(), "atrophy-shell-cap-"));
     dirs.push(d);
-    const emitted = 1 << 19;
-    const r = await run(bash, ["-c", 's=x; for i in {1..19}; do s="$s$s"; done; printf "%s" "$s"'], {
-      cwd: d,
-      timeoutMs: 60_000,
-      env: SHELL_ENV(bash),
-    });
-    expect(r.stdout.length).toBeLessThan(emitted);
-    expect(shellOutputTruncated(r.stdout)).toBe(true);
+    const script = `s=x; for i in {1..${n}}; do s="$s$s"; done; printf "%s" "${drop ? "${s:1}" : "$s"}"`;
+    const r = await run(bash, ["-c", script], { cwd: d, timeoutMs: 60_000, env: SHELL_ENV(bash) });
+    return r.stdout;
+  }
+
+  it("flags an output the runner really did cut off", async () => {
+    // 2^19 characters, comfortably past the 256 KB cap.
+    const stdout = await capture(19, 0);
+    expect(stdout.length).toBeLessThan(1 << 19);
+    expect(shellOutputTruncated(stdout)).toBe(true);
+  });
+
+  it("...and does not flag one that just fits", async () => {
+    // 2^18 - 1 = one character under the cap: a complete output, so a mirror set *below*
+    // the runner's real cap fails here. Without this the pair only catches drift upward.
+    const stdout = await capture(18, 1);
+    expect(stdout.length).toBe(256 * 1024 - 1);
+    expect(shellOutputTruncated(stdout)).toBe(false);
   });
 });

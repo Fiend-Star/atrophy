@@ -437,11 +437,33 @@ export function bashUnavailable(total: number, cmd?: string, cause?: Error): Gra
 }
 
 /**
+ * `$HOME` for one graded case: the case's own directory, forward-slashed. A native Windows
+ * path would reach the script as a run of shell escapes (`C:\Users\...` reads `\U` as `U`),
+ * while `C:/Users/...` is a path msys and glibc both resolve.
+ */
+function shellHome(caseDir: string): string {
+  return caseDir.replace(/\\/g, "/");
+}
+
+/**
  * Build one case's world: its own directory, its `files` written by Node (never by a shell
  * prelude - that would need the very tools the drill is testing), then the submitted
  * script over the top. Returns a harnessError message, or undefined when the case is ready.
+ *
+ * `files` content is staged byte-exact, deliberately: the CR-strip below is a rule about
+ * the *script* (one submission must not grade two ways across toolchains), while a fixture
+ * is authored data a drill may need CRs in - "strip the DOS line endings" is a drill.
  */
-function stageShellCase(caseDir: string, c: ShellCase, scriptName: string, script: string): string | undefined {
+function stageShellCase(
+  caseDir: string,
+  c: ShellCase,
+  scriptName: string,
+  script: string,
+  caseNumber: number,
+): string | undefined {
+  // What the catch below is allowed to name: the host path in an errno message is not
+  // the user's business, and on a resubmit it is not even stable.
+  let staging = "its directory";
   try {
     // Cleared, not just created: the drill loop re-grades in the same temp dir on every
     // resubmit, so a case that writes a file would otherwise find it already there on the
@@ -449,18 +471,24 @@ function stageShellCase(caseDir: string, c: ShellCase, scriptName: string, scrip
     rmSync(caseDir, { recursive: true, force: true });
     mkdirSync(caseDir, { recursive: true });
     for (const [key, contents] of Object.entries(c.files ?? {})) {
-      // Parse already rejected these keys. The assertion is here because an exercise can
-      // reach the grader without having come through the schema, and "../x" would write
-      // outside the case's world - the one staging bug that is not self-limiting.
+      staging = `files key "${key}"`;
+      // Parse already rejected these keys. The assertion is here because a programmatically
+      // constructed exercise reaches the grader without passing through the schema (every
+      // production door - pack load, generator families - parses first), and "../x" is the
+      // one staging bug that is not self-limiting.
       const problem = stagedFileKeyProblem(key);
       if (problem) return `exercise bug: files key "${key}" ${problem} - please report this exercise`;
       const target = join(caseDir, key);
       mkdirSync(dirname(target), { recursive: true });
       writeFileSync(target, contents, "utf8");
     }
+    staging = scriptName;
     writeFileSync(join(caseDir, scriptName), script, "utf8");
   } catch (err) {
-    return `could not stage the shell case: ${(err as Error).message}`;
+    // The realistic cause is a `files` map the schema cannot fault key by key - {"a": …,
+    // "a/b": …} needs `a` to be a file and a directory at once, and fails EEXIST here.
+    const code = (err as NodeJS.ErrnoException).code ?? (err as Error).name;
+    return `could not stage case ${caseNumber}: ${staging} (${code}) - please report this exercise`;
   }
   return undefined;
 }
@@ -489,6 +517,9 @@ export async function gradeShell(
   try {
     // Rule 1: msys bash tolerates CRLF and glibc bash does not, so the same submission
     // would pass on Windows and fail on Linux. Strip the CRs and the answer is one answer.
+    // Both bluntnesses are deliberate and out of reach of real drill content: the read/write
+    // round-trip re-encodes as UTF-8 (a non-UTF-8 byte comes back U+FFFD), and *every* CR
+    // goes, not only the line-ending ones - a bare CR inside a quoted string included.
     script = readFileSync(join(dir, scriptName), "utf8").replace(/\r/g, "");
   } catch (err) {
     return { passed: 0, total, failures: [], harnessError: `could not read ${scriptName}: ${(err as Error).message}` };
@@ -504,7 +535,7 @@ export async function gradeShell(
   for (const [index, c] of ex.shellCases.entries()) {
     const caseNumber = index + 1;
     const caseDir = join(dir, `case-${caseNumber}`);
-    const staging = stageShellCase(caseDir, c, scriptName, script);
+    const staging = stageShellCase(caseDir, c, scriptName, script, caseNumber);
     if (staging) return { passed: 0, total, failures: [], harnessError: staging };
 
     let result: RunResult;
@@ -512,35 +543,38 @@ export async function gradeShell(
       // argv, not a command line: the args reach the script as positional parameters
       // with no shell in between, and the script itself is named relative to its own
       // directory so `$0` reads the same on every host.
+      //
+      // P13, spec-accepted: the runner resolves on `close`, so a backgrounded child of
+      // the user's own script keeps holding the stdout pipe after the SIGKILL and the
+      // call can outlast testTimeoutMs by however long that child lives. The budget
+      // bounds the drill's own commands, not an orphan; shipped content may not
+      // background at all (T5 greps for `&`/`disown`/`nohup`).
       result = await run(bash, [scriptName, ...(c.args ?? [])], {
         cwd: caseDir,
         timeoutMs: ex.testTimeoutMs,
-        env: shellEnv,
+        // Per case, because the value is the case's own directory: unpinned, `$HOME` is
+        // the user's real home on Windows (msys derives it from the HOMEDRIVE/HOMEPATH
+        // libuv force-inherits) and empty under glibc - one `~` naming two different
+        // places, one of them outside the scratch dir entirely. Pinning bounds every `~`
+        // write inside the case and keeps the user's identity out of the graded run.
+        // What `$HOME` *prints* still differs by host, which is a content law rather than
+        // something an env pin can fix, and the remaining identity vars libuv forces in
+        // are out of reach from here (runner.ts documents that).
+        env: { ...shellEnv, HOME: shellHome(caseDir) },
       });
     } catch (err) {
       return bashUnavailable(total, bash, err as Error);
     }
 
-    // Both of these void the attempt rather than scoring the cases that did grade: a
-    // partial score is indistinguishable to the user from a half-right answer, and
-    // neither a killed run nor a broken toolchain is evidence about them.
+    // A killed run is not evidence about the answer, and voiding the whole attempt rather
+    // than scoring the cases that did grade follows gradeSql's bank-bug rule: a partial
+    // score is indistinguishable to the user from a half-right answer.
     if (result.timedOut) {
       return {
         passed: 0,
         total,
         failures: [],
         harnessError: `case ${caseNumber} timed out after ${ex.testTimeoutMs} ms (infinite loop?)`,
-      };
-    }
-    const missing = missingPinnedTools(result.stderr);
-    if (missing.length > 0) {
-      return {
-        passed: 0,
-        total,
-        failures: [],
-        harnessError:
-          `case ${caseNumber}: bash could not find ${missing.join(", ")}, which every shell drill may use - ` +
-          `this is a broken bash install or PATH (${bash}), not your answer`,
       };
     }
 
@@ -553,8 +587,28 @@ export async function gradeShell(
       stderr: result.stderr,
       truncated: shellOutputTruncated(result.stdout),
     });
-    if (failure) failures.push({ index, error: failure });
-    else passed += 1;
+    if (!failure) {
+      passed += 1;
+      continue;
+    }
+
+    // Only a case that failed is worth asking *why*. A broken toolchain fails its cases
+    // by construction - P2's shape is the tools gone, no output and exit 0 - so gating
+    // here costs the signature nothing, while consulting it on a passing case would void
+    // a correct answer over stderr the drill never graded (a script that happens to run
+    // `PATH=/nonexistent sort` as a side effect still answered the question).
+    const missing = missingPinnedTools(result.stderr);
+    if (missing.length > 0) {
+      return {
+        passed: 0,
+        total,
+        failures: [],
+        harnessError:
+          `case ${caseNumber}: bash could not find ${missing.join(", ")}, which every shell drill may use - ` +
+          `this is a broken bash install or PATH (${bash}), not your answer`,
+      };
+    }
+    failures.push({ index, error: failure });
   }
 
   return { passed, total, failures };
