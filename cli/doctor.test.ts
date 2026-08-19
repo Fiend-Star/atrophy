@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  bashCheckResult,
   checkBank,
+  checkBash,
   checkConfig,
   checkDb,
   checkEditor,
@@ -163,6 +165,51 @@ describe("checkJava", () => {
     expect(r.name).toBe("Java (JDK)");
     expect(["pass", "warn"]).toContain(r.status);
     if (r.status === "warn") expect(r.detail).toMatch(/JDK|ATROPHY_JAVA_HOME/);
+  });
+});
+
+describe("bashCheckResult", () => {
+  const WIN_BASH = "C:\\Program Files\\Git\\usr\\bin\\bash.exe";
+  const gitBash = { command: WIN_BASH, rule: "git --exec-path" } as const;
+
+  it("names the resolved path and which discovery rule won", () => {
+    // The user's real question is "did it find Git Bash or WSL?".
+    const r = bashCheckResult(gitBash, "5.2.37(1)-release");
+    expect(r.status).toBe("pass");
+    expect(r.detail).toContain(WIN_BASH);
+    expect(r.detail).toContain("5.2.37");
+    expect(r.detail).toContain("git --exec-path");
+  });
+
+  it("warns below the floor with the version and the floor", () => {
+    const r = bashCheckResult({ command: "/bin/bash", rule: "standard location" }, "3.2.57(1)-release");
+    expect(r.status).toBe("warn");
+    expect(r.detail).toContain("3.2.57");
+    expect(r.detail).toMatch(/>= 4/);
+    expect(r.detail).toContain("/bin/bash");
+  });
+
+  it("warns when discovery found nothing at all", () => {
+    const r = bashCheckResult(undefined, "");
+    expect(r.status).toBe("warn");
+    expect(r.detail).toMatch(/ATROPHY_BASH/);
+  });
+
+  it("warns on a version it cannot read, because that is what hasBash() gates on", () => {
+    // Unlike javaCheckResult, which passes an unparseable version: hasBash() requires a
+    // major at or above the floor, so a silent $BASH_VERSION really does hide drills.
+    const r = bashCheckResult(gitBash, "");
+    expect(r.status).toBe("warn");
+    expect(r.detail).toContain(WIN_BASH);
+  });
+});
+
+describe("checkBash", () => {
+  it("returns a CheckResult and never throws or fails", () => {
+    const r = checkBash();
+    expect(r.name).toBe("Bash (shell)");
+    expect(["pass", "warn"]).toContain(r.status);
+    if (r.status === "warn") expect(r.detail).toMatch(/bash|ATROPHY_BASH/i);
   });
 });
 

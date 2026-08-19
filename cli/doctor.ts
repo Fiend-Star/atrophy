@@ -6,6 +6,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pc from "picocolors";
 import { LANGUAGES, loadBank, loadBankDetailed, type Axis, type CodeExercise, type Language } from "../bank/schema.js";
+import {
+  MIN_BASH_MAJOR,
+  missingBashHint,
+  parseBashMajor,
+  resolveBash,
+  type BashDiscovery,
+} from "../engine/bashtool.js";
 import { grade, pythonCommand, solutionFileName } from "../engine/grader.js";
 import { MIN_JDK_MAJOR, javacCommand, missingJdkHint, parseJavaMajor } from "../engine/javatool.js";
 import { Store } from "../store/db.js";
@@ -127,6 +134,63 @@ export function checkJava(): CheckResult {
     /* fall through to warn */
   }
   return { name: "Java (JDK)", status: "warn", detail: missingJdkHint(cmd) };
+}
+
+/**
+ * The render half of `checkBash`, split out so the spawn is the only untested part.
+ * It reports two things `checkJava` never has to: the *resolved path* and *which
+ * discovery rule won* - on Windows the user's real question is "did it find Git Bash
+ * or WSL?", and only the rule answers it.
+ *
+ * Where `javaCheckResult` passes a version it cannot parse, this one warns: `hasBash()`
+ * gates on the major, so an unreadable `$BASH_VERSION` really does hide every shell
+ * drill that runs a script, and a green line here would be a lying diagnostic.
+ */
+export function bashCheckResult(found: BashDiscovery | undefined, versionOutput: string): CheckResult {
+  const name = "Bash (shell)";
+  if (!found) return { name, status: "warn", detail: missingBashHint() };
+  const version = versionOutput.trim();
+  const via = `(via ${found.rule})`;
+  const major = parseBashMajor(version);
+  if (major === undefined) {
+    return {
+      name,
+      status: "warn",
+      detail: `${found.command}: reported no bash version ${via} - shell drills that run a script stay hidden`,
+    };
+  }
+  if (major < MIN_BASH_MAJOR) {
+    return {
+      name,
+      status: "warn",
+      detail: `${found.command}: GNU bash ${version} ${via} - shell drills need bash >= ${MIN_BASH_MAJOR} (Python/JavaScript/SQL drills are unaffected)`,
+    };
+  }
+  return { name, status: "pass", detail: `${found.command}: GNU bash ${version} ${via}` };
+}
+
+/**
+ * Bash present and modern enough for shell drills. Warn-only for the same reason as
+ * `checkJava`: py/js/sql drills are unaffected, and a bash-less host is served a
+ * smaller pool rather than an install demand. Resolves and probes directly rather than
+ * via `bashCommand()`/`hasBash()`, whose per-process caches would answer for whatever
+ * ATROPHY_BASH was set earlier in the run.
+ */
+export function checkBash(): CheckResult {
+  const found = resolveBash();
+  if (found) {
+    try {
+      const r = spawnSync(found.command, ["-c", "echo $BASH_VERSION"], {
+        encoding: "utf8",
+        timeout: 10_000,
+        windowsHide: true,
+      });
+      if (r.status === 0) return bashCheckResult(found, r.stdout || "");
+    } catch {
+      /* fall through to warn */
+    }
+  }
+  return { name: "Bash (shell)", status: "warn", detail: missingBashHint(found?.command) };
 }
 
 /**
@@ -427,6 +491,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     checkNode(),
     checkPython(),
     checkJava(),
+    checkBash(),
     checkSql(),
     checkEditor(),
     checkDb(deps.dbPath),
