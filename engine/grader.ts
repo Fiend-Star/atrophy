@@ -1,7 +1,7 @@
 import { copyFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
-import { isHarness, isSqlWrite } from "../bank/schema.js";
+import { isHarness, isShellWrite, isSqlWrite } from "../bank/schema.js";
 import type {
   CodeLikeExercise,
   HarnessExercise,
@@ -44,6 +44,7 @@ export function solutionFileName(ex: CodeLikeExercise | OutlineExercise): string
   if (ex.kind === "outline") return "outline.md";
   if (ex.language === "java") return "Solution.java";
   if (ex.language === "sql") return "solution.sql";
+  if (ex.language === "shell") return "solution.sh";
   return ex.language === "python" ? "solution.py" : "solution.js";
 }
 
@@ -442,6 +443,17 @@ async function gradeHarness(ex: HarnessExercise, dir: string): Promise<GradeResu
 export async function grade(ex: CodeLikeExercise, dir: string): Promise<GradeResult> {
   if (isHarness(ex)) return gradeHarness(ex, dir);
   if (isSqlWrite(ex)) return gradeSql(ex, dir);
+  // A shell write is graded by running the script under bash, which this build has no
+  // lane for yet. No shipped exercise reaches here, and if one did, "no grader" is a
+  // broken toolchain - a harnessError - never a score against the user.
+  if (isShellWrite(ex)) {
+    return {
+      passed: 0,
+      total: ex.shellCases.length,
+      failures: [],
+      harnessError: "shell grading is not wired up in this build",
+    };
+  }
   if (ex.language === "java") return gradeJavaTests(ex, dir);
 
   const isPy = ex.language === "python";

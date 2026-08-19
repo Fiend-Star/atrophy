@@ -29,7 +29,7 @@ Interactive drills block on stdin/$EDITOR. For non-interactive runs use `--show`
 
 ## Architecture
 
-ESM throughout (`"type": "module"`, NodeNext): **relative imports use `.js` extensions even inside `.ts` files**. Strict TS with `noUncheckedIndexedAccess`. Tests are colocated `*.test.ts` next to their source; there is no vitest config file. One of them tests the docs: `cli/readme-claims.test.ts` recomputes, from the built-in bank and the generator registry, the facts README's five-skills table and `--lang` row assert (per-axis offerable kinds, which axes carry `language: "sql"` content, java static/family counts and per-axis coverage) — so bank content and that README section have to move in the same commit.
+ESM throughout (`"type": "module"`, NodeNext): **relative imports use `.js` extensions even inside `.ts` files**. Strict TS with `noUncheckedIndexedAccess`. Tests are colocated `*.test.ts` next to their source, and `vitest.config.ts` exists only to exclude `**/.claude/**` so the suite never crawls an agent worktree's duplicated copies. One of the test files tests the docs: `cli/readme-claims.test.ts` recomputes, from the built-in bank and the generator registry, the facts README's five-skills table and `--lang` row assert (per-axis offerable kinds, which axes carry `language: "sql"` content, java static/family counts and per-axis coverage) — so bank content and that README section have to move in the same commit.
 
 Data flows in one direction: `bank` (content) → `engine` (logic) → `store` (SQLite) → `cli` (orchestration + HTTP payload) → `dashboard` (rendering).
 

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { BankError, exerciseSchema, isHarness, isSqlWrite, JVM_KINDS, loadBank, loadBankDetailed, parseExercise, totalUnits, type CodeExercise, type HarnessExercise, type RecallExercise } from "./schema.js";
+import { BankError, exerciseSchema, isHarness, isShellWrite, isSqlWrite, JVM_KINDS, LANGUAGES, loadBank, loadBankDetailed, parseExercise, spawnsShell, totalUnits, type CodeExercise, type HarnessExercise, type RecallExercise } from "./schema.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 
@@ -139,7 +139,7 @@ describe("recall kind", () => {
   it("takes a concrete language as well as \"any\", and still nothing else", () => {
     // A drill about JVM flags or SQL window functions is not language-agnostic just
     // because answering it runs no toolchain; "any" stays the tag for the ones that are.
-    for (const language of ["java", "sql", "python", "javascript", "any"]) {
+    for (const language of ["java", "sql", "shell", "python", "javascript", "any"]) {
       const parsed = parseExercise(JSON.stringify({ ...recall, language })) as RecallExercise;
       expect(parsed.language).toBe(language);
     }
@@ -255,6 +255,109 @@ describe("sql write shape", () => {
   });
   it("exports JVM_KINDS as the four java-graded kinds", () => {
     expect([...JVM_KINDS]).toEqual(["write", "fix", "write-harness", "fix-harness"]);
+  });
+});
+
+const shellBase = {
+  id: "sr-sh-901", axis: "syntax-recall", tier: 1, title: "t", prompt: "p",
+  softTimeLimitSeconds: 60,
+};
+const shellCases = [
+  { files: { "log.txt": "ok\nerr\nok\n" }, args: ["ok"], expectedStdout: "2\n" },
+  { files: { "log.txt": "err\n" }, args: ["ok"], expectedStdout: "0\n", expectedExitCode: 1 },
+];
+/** A shell write with `over` merged in; `shellCases` is the discriminating pair above. */
+const shellWrite = (over: Record<string, unknown> = {}) => ({
+  ...shellBase, kind: "write", language: "shell",
+  starterCode: "#!/usr/bin/env bash\n", shellCases, ...over,
+});
+
+describe("shell write shape", () => {
+  it("accepts a well-formed shell write (shellCases, no tests/functionName)", () => {
+    const ex = exerciseSchema.parse(shellWrite());
+    expect(isShellWrite(ex)).toBe(true);
+    expect(totalUnits(ex)).toBe(2);
+  });
+
+  it("carries files, args and both expectations through parsing", () => {
+    // z.object strips unknown keys, so reading them back is what proves the shellCase
+    // fields are in the schema at all. expectedExitCode is optional (absent means 0).
+    const ex = exerciseSchema.parse(shellWrite());
+    if (!isShellWrite(ex)) throw new Error("fixture is not a shell write");
+    expect(ex.shellCases[0]).toEqual({ files: { "log.txt": "ok\nerr\nok\n" }, args: ["ok"], expectedStdout: "2\n" });
+    expect(ex.shellCases[1]!.expectedExitCode).toBe(1);
+  });
+
+  it("rejects a shell write carrying tests, functionName, or the sql fields", () => {
+    expect(() => exerciseSchema.parse(shellWrite({ tests: [{ args: [], expected: 1 }] }))).toThrow(/no hidden tests/);
+    expect(() => exerciseSchema.parse(shellWrite({ functionName: "f" }))).toThrow(/no function to call/);
+    expect(() => exerciseSchema.parse(shellWrite({ cases: sqlCases }))).toThrow(/cases is sql-only/);
+    expect(() => exerciseSchema.parse(shellWrite({ ordered: true }))).toThrow(/ordered is sql-only/);
+    expect(() => exerciseSchema.parse(shellWrite({ shellCases: undefined }))).toThrow(/shellCases/);
+  });
+
+  it("rejects shell write with < 2 cases or an undiscriminating expectation pair", () => {
+    expect(() => exerciseSchema.parse(shellWrite({ shellCases: [shellCases[0]] }))).toThrow();
+    // Same stdout and same exit status twice is one case: `echo` of a literal passes both.
+    expect(() => exerciseSchema.parse(shellWrite({ shellCases: [shellCases[0], shellCases[0]] })))
+      .toThrow(/must differ in expected stdout or exit code/);
+    // Differing only in files/args is not a discriminating pair either.
+    expect(() => exerciseSchema.parse(shellWrite({
+      shellCases: [shellCases[0], { ...shellCases[0], files: { "log.txt": "ok\nok\n" }, args: ["nope"] }],
+    }))).toThrow(/must differ in expected stdout or exit code/);
+    // An explicit 0 and an absent exitCode are the same expectation - the default is 0.
+    expect(() => exerciseSchema.parse(shellWrite({
+      shellCases: [shellCases[0], { ...shellCases[0], expectedExitCode: 0 }],
+    }))).toThrow(/must differ in expected stdout or exit code/);
+  });
+
+  it("rejects a files key that could escape the case directory", () => {
+    for (const key of ["/etc/passwd", "C:\\tmp\\x", "\\\\host\\share\\x", "../outside.txt", "a/../../b.txt", "logs/", ""]) {
+      expect(
+        () => exerciseSchema.parse(shellWrite({ shellCases: [{ ...shellCases[0], files: { [key]: "x" } }, shellCases[1]] })),
+        `files key ${JSON.stringify(key)} must not parse`,
+      ).toThrow(/relative path inside the case directory/);
+    }
+    // A nested relative path is the normal case and must still parse.
+    const ok = exerciseSchema.parse(shellWrite({
+      shellCases: [{ ...shellCases[0], files: { "logs/app.log": "x" } }, shellCases[1]],
+    }));
+    expect(isShellWrite(ok)).toBe(true);
+  });
+
+  it("rejects shellCases off shell", () => {
+    expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "python", functionName: "f", starterCode: "def f(): pass", tests: [{ args: [], expected: 1 }], shellCases })).toThrow(/shellCases is shell-only/);
+    expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "sql", starterCode: "-- q", cases: sqlCases, shellCases })).toThrow(/shellCases is shell-only/);
+  });
+
+  it("rejects shell on fix and predict-output, naming the kinds that do ship shell", () => {
+    // Pinned to the rule's own message, same reason as the sql twin: the fix fixture is
+    // invalid several ways over, so a bare .toThrow() would stay green with the rule gone.
+    expect(() => exerciseSchema.parse(shellWrite({ kind: "fix", axis: "debugging" }))).toThrow(/shell ships no fix or predict-output/);
+    expect(() => exerciseSchema.parse({ ...shellBase, kind: "predict-output", language: "shell", snippet: "echo hi" })).toThrow(/shell ships no fix or predict-output/);
+  });
+
+  it("accepts shell on cloze, which the rejection message above promises", () => {
+    // The recall half is pinned by the recall suite's language loop; this is the cloze
+    // half, so the promise cannot quietly become a lie. Neither kind runs anything.
+    const ex = exerciseSchema.parse({
+      ...shellBase, id: "api-sh-901", axis: "api-memory", kind: "cloze", language: "shell",
+      snippet: "grep -c ____ log.txt", acceptedAnswers: ["ok"],
+    });
+    expect(ex.language).toBe("shell");
+  });
+
+  it("spawnsShell is write-only, unlike spawnsJvm", () => {
+    // Only a shell write runs the user's script; a shell cloze/recall matches in-process,
+    // and the refinement above rejects every other shell kind by name.
+    expect(spawnsShell("write")).toBe(true);
+    for (const kind of ["fix", "write-harness", "fix-harness", "predict-output", "cloze", "outline", "recall"] as const) {
+      expect(spawnsShell(kind), `spawnsShell(${kind})`).toBe(false);
+    }
+  });
+
+  it("appends shell to LANGUAGES so the setup menu numbering stays stable", () => {
+    expect([...LANGUAGES]).toEqual(["python", "javascript", "java", "sql", "shell"]);
   });
 });
 

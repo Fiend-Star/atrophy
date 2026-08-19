@@ -665,3 +665,17 @@ describe("recall grading (pure, no JDK needed)", () => {
     expect(gradeRecall(huge, "12")).toBe(false);
   });
 });
+
+describe("solutionFileName", () => {
+  it("names the file each language's runtime will actually read", () => {
+    // The extension is not cosmetic: the grader hands this exact file to the toolchain
+    // (or, for java, to javac, which requires Solution.java). shell is the newest arm -
+    // without it the fallthrough would call a bash script solution.js.
+    const named = (language: string) => solutionFileName({ ...pyEx, language } as CodeLikeExercise);
+    expect(named("python")).toBe("solution.py");
+    expect(named("javascript")).toBe("solution.js");
+    expect(named("java")).toBe("Solution.java");
+    expect(named("sql")).toBe("solution.sql");
+    expect(named("shell")).toBe("solution.sh");
+  });
+});

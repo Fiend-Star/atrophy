@@ -53,13 +53,16 @@ const EXPECTED_SQL_LANGUAGE_AXES: Axis[] = ["syntax-recall", "api-memory"];
  * engine. Proves the row's "language-agnostic drills still qualify" claim: decomposition
  * has no sql-tagged content at all (see EXPECTED_SQL_LANGUAGE_AXES above) but still shows
  * up under sql here, because its "any"-tagged outline drills qualify under every
- * language.
+ * language. shell is the pure case of that claim - the built-in bank ships no shell
+ * content at all, so the only axes it reaches are the ones carrying "any" drills, and
+ * the README row says so.
  */
 const EXPECTED_AXES_BY_LANG: Record<Language, Axis[]> = {
   python: [...AXES],
   javascript: [...AXES],
   java: [...AXES],
   sql: ["syntax-recall", "api-memory", "decomposition"],
+  shell: ["api-memory", "decomposition"],
 };
 
 /**

@@ -10,7 +10,9 @@ export const AXES = [
   "decomposition",
 ] as const;
 
-export const LANGUAGES = ["python", "javascript", "java", "sql"] as const;
+// Appended-only: `atrophy setup`'s menu numbers the entries in this order, so inserting
+// one in the middle would renumber a menu users have already learned.
+export const LANGUAGES = ["python", "javascript", "java", "sql", "shell"] as const;
 
 /**
  * Kinds whose java grading compiles and runs a JVM (javac + java). `predict-output`
@@ -52,6 +54,56 @@ export function canonicalRows(rows: readonly Record<string, unknown>[]): string 
 }
 
 /**
+ * Where a staged file may land: inside the case's own scratch dir, and nowhere else. An
+ * absolute key (leading separator, drive letter, UNC) or a `..` segment would write
+ * outside it, so both are parse errors rather than grade-time surprises. An empty segment
+ * is not a file name either - "logs/" names a directory, and "a//b" is a typo.
+ */
+function isStagedFileKey(key: string): boolean {
+  if (key.length === 0) return false;
+  if (key.startsWith("/") || key.startsWith("\\")) return false;
+  if (/^[a-zA-Z]:/.test(key)) return false;
+  return key.split(/[/\\]/).every((segment) => segment.length > 0 && segment !== "..");
+}
+
+/**
+ * One shell case: the files staged beside the script, the argv it is called with, and what
+ * running it must produce. Each case gets a fresh directory, so `files` is the whole world
+ * the script sees.
+ */
+export const shellCaseSchema = z
+  .object({
+    /** Relative path -> contents, written into the case's directory before the run. */
+    files: z.record(z.string(), z.string()).optional(),
+    /** Arguments passed to the script. */
+    args: z.array(z.string()).optional(),
+    /** Exact stdout the script must print. */
+    expectedStdout: z.string(),
+    /** Exit status the script must end on; absent means 0. */
+    expectedExitCode: z.number().int().min(0).max(255).optional(),
+  })
+  .superRefine((c, ctx) => {
+    for (const key of Object.keys(c.files ?? {})) {
+      if (isStagedFileKey(key)) continue;
+      ctx.addIssue({
+        code: "custom",
+        path: ["files", key],
+        message: `files key "${key}" must be a relative path inside the case directory (no leading separator, drive letter, or "..")`,
+      });
+    }
+  });
+export type ShellCase = z.infer<typeof shellCaseSchema>;
+
+/**
+ * What a shell case expects, as one comparable value: stdout paired with the exit status
+ * it defaults to. Two cases agreeing here are one case - the anti-hardcoding rule below
+ * counts distinct expectations, not distinct fixtures.
+ */
+function shellExpectation(c: ShellCase): string {
+  return JSON.stringify([c.expectedStdout, c.expectedExitCode ?? 0]);
+}
+
+/**
  * How many blanks a cloze snippet has: `____` runs, counted non-overlapping. It lives
  * here because the parse rule below needs it; `engine/cloze.ts` re-exports it as the
  * engine-side door so there is exactly one definition.
@@ -89,24 +141,26 @@ const submitPolicySchema = z.enum(["loop", "single"]).optional();
 const agnosticLanguage = z.union([z.enum(LANGUAGES), z.literal("any")]);
 
 /**
- * Kinds where the user edits code that gets run against hidden tests - except sql
- * writes, which have no function to call and are graded by `cases` instead. The
- * either/or is not expressible in the object shape, so the fields are optional here
- * and the refinement below decides which set an exercise must carry.
+ * Kinds where the user edits code that gets run against hidden tests - except sql and
+ * shell writes, which have no function to call and are graded by `cases` / `shellCases`
+ * instead. The either/or is not expressible in the object shape, so the fields are
+ * optional here and the refinement below decides which set an exercise must carry.
  */
 const codeFields = {
   ...baseFields,
   language: z.enum(LANGUAGES),
-  /** Name of the function the harness will call. Required off sql. */
+  /** Name of the function the harness will call. Required off sql and shell. */
   functionName: z.string().min(1).optional(),
   /** Written into the solution file the user edits (for "fix": the buggy code). */
   starterCode: z.string().min(1),
-  /** Hidden tests. Required off sql. */
+  /** Hidden tests. Required off sql and shell. */
   tests: z.array(testCaseSchema).min(1).optional(),
   /** sql only: fixtures + the rows the query must return. Two, so a literal cannot pass. */
   cases: z.array(sqlCaseSchema).min(2).optional(),
   /** sql only: when true, row order is part of the answer (ORDER BY drills). */
   ordered: z.boolean().optional(),
+  /** shell only: staged files + argv, and the stdout/exit status running the script must produce. */
+  shellCases: z.array(shellCaseSchema).min(2).optional(),
   submitPolicy: submitPolicySchema,
 };
 
@@ -176,19 +230,25 @@ const exerciseUnion = z.discriminatedUnion("kind", [
 
 /**
  * Cross-field rules the discriminated union cannot state on its own. Only a sql write
- * carries `cases`; every other write/fix carries `tests` + `functionName`. Among the
- * *graded-code* kinds sql is write-only: there is nothing to "fix" in a query the user
- * never wrote, and a query has no stdout to predict - a sql `recall` question needs
- * neither and sits outside this refinement entirely. A cloze's per-blank answers are the
- * other such rule: their count only means something against the snippet.
+ * carries `cases` and only a shell write carries `shellCases`; every other write/fix
+ * carries `tests` + `functionName`. Among the *graded-code* kinds both sql and shell are
+ * write-only: there is nothing to "fix" in a query the user never wrote, a query has no
+ * stdout to predict, and the corpus ships no shell fix or predict-output at all - a sql
+ * or shell `recall` question needs none of this and sits outside the refinement entirely.
+ * A cloze's per-blank answers are the other such rule: their count only means something
+ * against the snippet.
  */
 const refinedUnion = exerciseUnion.superRefine((ex, ctx) => {
   const reject = (path: string, message: string) => ctx.addIssue({ code: "custom", path: [path], message });
   const sqlIsWriteOnly = "sql is write-only among the graded-code kinds - a sql cloze or recall is fine";
+  const shellIsWriteOnly =
+    "shell ships no fix or predict-output content - write is the graded-code kind for shell, and a shell cloze or recall is fine";
+  const shellCasesIsShellOnly = "shellCases is shell-only";
 
   if (ex.kind === "write" && ex.language === "sql") {
     if (ex.tests) reject("tests", "sql exercises have no hidden tests - grade them with cases");
     if (ex.functionName) reject("functionName", "sql exercises have no function to call");
+    if (ex.shellCases) reject("shellCases", shellCasesIsShellOnly);
     if (!ex.cases) reject("cases", "sql exercises are graded by cases, which is required");
     // Two cases that expect the same rows are one case: a hardcoded literal passes both,
     // which is exactly the answer the drill exists to rule out.
@@ -197,15 +257,33 @@ const refinedUnion = exerciseUnion.superRefine((ex, ctx) => {
     }
     return;
   }
+  if (ex.kind === "write" && ex.language === "shell") {
+    if (ex.tests) reject("tests", "shell exercises have no hidden tests - grade them with shellCases");
+    if (ex.functionName) reject("functionName", "shell exercises have no function to call");
+    if (ex.cases) reject("cases", "cases is sql-only");
+    if (ex.ordered !== undefined) reject("ordered", "ordered is sql-only");
+    if (!ex.shellCases) reject("shellCases", "shell exercises are graded by shellCases, which is required");
+    // The sql "different rows" twin: two cases expecting the same stdout and the same exit
+    // status are one case, and a script that echoes a literal answers both.
+    else if (new Set(ex.shellCases.map(shellExpectation)).size < 2) {
+      reject("shellCases", "at least two cases must differ in expected stdout or exit code, or a hardcoded echo passes");
+    }
+    return;
+  }
   if (ex.kind === "write" || ex.kind === "fix") {
     if (ex.language === "sql") reject("language", sqlIsWriteOnly);
+    if (ex.language === "shell") reject("language", shellIsWriteOnly);
     if (!ex.tests) reject("tests", "tests are required");
     if (!ex.functionName) reject("functionName", "functionName is required");
     if (ex.cases) reject("cases", "cases is sql-only");
     if (ex.ordered !== undefined) reject("ordered", "ordered is sql-only");
+    if (ex.shellCases) reject("shellCases", shellCasesIsShellOnly);
     return;
   }
-  if (ex.kind === "predict-output" && ex.language === "sql") reject("language", sqlIsWriteOnly);
+  if (ex.kind === "predict-output") {
+    if (ex.language === "sql") reject("language", sqlIsWriteOnly);
+    if (ex.language === "shell") reject("language", shellIsWriteOnly);
+  }
   if (ex.kind === "cloze") {
     const blanks = countBlanks(ex.snippet);
     // The union has already rejected a mixed array, so the first entry decides the shape.
@@ -228,25 +306,30 @@ export type SqlWriteExercise = Extract<RawExercise, { kind: "write" }> & {
   language: "sql";
   cases: SqlCase[];
 };
+/** The shell shape of a write: graded by running the script over `shellCases`. */
+export type ShellWriteExercise = Extract<RawExercise, { kind: "write" }> & {
+  language: "shell";
+  shellCases: ShellCase[];
+};
 /**
  * Every other write/fix: the `functionName` + `tests` pairing, made definite. The
- * language exclusion is what makes `isSqlWrite` narrow soundly in the *false*
- * direction: without it a hand-built `{ language: "sql", tests: [...] }` literal is
- * assignable here, and the grader's sql check would then hand a `tests`-shaped
+ * language exclusion is what makes `isSqlWrite`/`isShellWrite` narrow soundly in the
+ * *false* direction: without it a hand-built `{ language: "sql", tests: [...] }` literal
+ * is assignable here, and the grader's sql check would then hand a `tests`-shaped
  * exercise to the language lanes.
  */
 export type TestedExercise = Extract<RawExercise, { kind: "write" | "fix" }> & {
-  language: Exclude<Language, "sql">;
+  language: Exclude<Language, "sql" | "shell">;
   functionName: string;
   tests: TestCase[];
 };
 /**
- * write/fix, split into the two graded shapes. Keeping the split in `Exercise` itself
- * is what lets `isSqlWrite` narrow in *both* directions, so a consumer reading `tests`
- * needs no assertion - the refinement above is what makes that sound, and
+ * write/fix, split into the three graded shapes. Keeping the split in `Exercise` itself
+ * is what lets `isSqlWrite`/`isShellWrite` narrow in *both* directions, so a consumer
+ * reading `tests` needs no assertion - the refinement above is what makes that sound, and
  * `parseExercise` is the only door these types come through.
  */
-export type CodeExercise = SqlWriteExercise | TestedExercise;
+export type CodeExercise = SqlWriteExercise | ShellWriteExercise | TestedExercise;
 export type Exercise = Exclude<RawExercise, { kind: "write" | "fix" }> | CodeExercise;
 
 /**
@@ -273,6 +356,11 @@ export function isSqlWrite(ex: Exercise): ex is SqlWriteExercise {
   return ex.kind === "write" && ex.language === "sql";
 }
 
+/** The shell write shape: `shellCases` in, `tests`/`functionName` out. */
+export function isShellWrite(ex: Exercise): ex is ShellWriteExercise {
+  return ex.kind === "write" && ex.language === "shell";
+}
+
 export function isHarness(ex: Exercise): ex is HarnessExercise {
   return ex.kind === "write-harness" || ex.kind === "fix-harness";
 }
@@ -287,12 +375,24 @@ export function spawnsJvm(kind: Exercise["kind"]): boolean {
   return kind === "predict-output" || JVM_KINDS.some((k) => k === kind);
 }
 
+/**
+ * Kinds whose grading runs bash. Paired with `language === "shell"` this is the "needs
+ * bash" test, and it is narrower than `spawnsJvm` for a reason: `write` is the only
+ * graded-code kind shell has (the refinement rejects a shell fix or predict-output by
+ * name), while a shell cloze or recall is matched in-process and needs no toolchain.
+ */
+export function spawnsShell(kind: Exercise["kind"]): boolean {
+  return kind === "write";
+}
+
 /** How many gradable units the exercise has (drives passed/total bookkeeping). */
 export function totalUnits(ex: Exercise): number {
   switch (ex.kind) {
     case "write":
     case "fix":
-      return isSqlWrite(ex) ? ex.cases.length : ex.tests.length;
+      if (isSqlWrite(ex)) return ex.cases.length;
+      if (isShellWrite(ex)) return ex.shellCases.length;
+      return ex.tests.length;
     case "write-harness":
     case "fix-harness":
       return ex.totalChecks;

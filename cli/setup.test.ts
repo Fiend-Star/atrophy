@@ -157,7 +157,7 @@ describe("setupAction: interactive (no flags)", () => {
   }
 
   it("scripted answers pick languages by number, then the track by number", async () => {
-    // LANGUAGES = python, javascript, java, sql -> "1,3" = python, java.
+    // LANGUAGES = python, javascript, java, sql, shell -> "1,3" = python, java.
     // tracks = [base, tpack] -> "2" = tpack.
     const io = stub(["1,3", "2"]);
     await setupAction({}, deps(io));
@@ -198,8 +198,8 @@ describe("setupAction: interactive (no flags)", () => {
   });
 
   it("re-prompts on an out-of-range language pick instead of silently writing 'all'", async () => {
-    // LANGUAGES has 4 entries; "5" is out of range and must not be treated as "all".
-    const io = stub(["5", "1,3", "2"]);
+    // LANGUAGES has 5 entries; "6" is out of range and must not be treated as "all".
+    const io = stub(["6", "1,3", "2"]);
     await setupAction({}, deps(io));
 
     const cfg = readConfig();

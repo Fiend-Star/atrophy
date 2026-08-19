@@ -161,7 +161,7 @@ atrophy baseline
 | `atrophy baseline` | First session: one drill per skill (~25 min) |
 | `atrophy drill` | One drill on your most-neglected skill |
 | `atrophy drill --axis debugging` | Drill a specific skill (`syntax-recall`, `debugging`, `code-reading`, `api-memory`, `decomposition`) |
-| `atrophy drill --lang python` | Restrict to Python (or `javascript`, `java`, `sql`) - language-agnostic drills still qualify, so a rep may come back in no language at all; packs may add drills that declare no language, and those qualify too |
+| `atrophy drill --lang python` | Restrict to Python (or `javascript`, `java`, `sql`, `shell`) - language-agnostic drills still qualify, so a rep may come back in no language at all; packs may add drills that declare no language, and those qualify too. `shell` is accepted but the built-in bank ships no shell drills yet, so on its own it reaches only the language-agnostic ones (API memory and decomposition) |
 | `atrophy drill --ai-on` | Monthly comparison rep with AI allowed |
 | `atrophy publish --handle you` | Opt in to the [public leaderboard](https://ashutosh-rath02.github.io/atrophy/leaderboard.html); afterwards every drill syncs automatically (`--stop` opts out) |
 | `atrophy stats` | Ratings table and week streak in the terminal |
