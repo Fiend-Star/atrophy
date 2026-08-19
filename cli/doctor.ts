@@ -11,6 +11,7 @@ import {
   missingBashHint,
   parseBashMajor,
   resolveBash,
+  versionLine,
   type BashDiscovery,
 } from "../engine/bashtool.js";
 import { grade, pythonCommand, solutionFileName } from "../engine/grader.js";
@@ -149,9 +150,12 @@ export function checkJava(): CheckResult {
 export function bashCheckResult(found: BashDiscovery | undefined, versionOutput: string): CheckResult {
   const name = "Bash (shell)";
   if (!found) return { name, status: "warn", detail: missingBashHint() };
-  const version = versionOutput.trim();
+  // Judge the raw output and print the very line that was judged: `versionLine` is the
+  // rule both this check and `hasBash` go through, so they cannot disagree, and one row
+  // of the report stays one line however chatty the probed program is.
+  const version = versionLine(versionOutput);
   const via = `(via ${found.rule})`;
-  const major = parseBashMajor(version);
+  const major = parseBashMajor(versionOutput);
   if (major === undefined) {
     return {
       name,

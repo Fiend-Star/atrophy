@@ -13,6 +13,7 @@ import {
   missingBashHint,
   parseBashMajor,
   resolveBash,
+  versionLine,
 } from "./bashtool.js";
 import { run } from "./runner.js";
 
@@ -33,9 +34,6 @@ describe("parseBashMajor", () => {
     expect(parseBashMajor("3.2.57(1)-release")).toBe(3);
     expect(parseBashMajor("5.2.37(1)-release\n")).toBe(5);
   });
-  it("also reads `bash --version`'s sentence form", () => {
-    expect(parseBashMajor("GNU bash, version 5.2.37(1)-release (x86_64-pc-msys)")).toBe(5);
-  });
   it("returns undefined when there is no version to read", () => {
     expect(parseBashMajor("")).toBeUndefined();
     expect(parseBashMajor("gibberish")).toBeUndefined();
@@ -43,13 +41,44 @@ describe("parseBashMajor", () => {
     // invent a number from the surrounding noise.
     expect(parseBashMajor("\n")).toBeUndefined();
   });
-  it("needs a word boundary, so a build number in parens is not a version", () => {
+  it("rejects a runnable non-bash whose banner merely contains a number", () => {
+    // cmd.exe does not understand -c, prints this, and exits 0 because stdin is at EOF.
+    // Accepting the 10 out of "[Version 10.0...]" would open the gate to cmd.exe grading
+    // shell drills, and no `command not found` would ever flag it.
+    expect(parseBashMajor(
+      "Microsoft Windows [Version 10.0.26200.9168]\r\n(c) Microsoft Corporation.\r\n\r\nC:\\x>",
+    )).toBeUndefined();
+    // powershell.exe answers with nothing at all.
+    expect(parseBashMajor("")).toBeUndefined();
+    // The version must lead, so no prose form is accepted - including bash's own
+    // `--version` sentence, which no call site passes.
+    expect(parseBashMajor("GNU bash, version 5.2.37(1)-release (x86_64-pc-msys)")).toBeUndefined();
+  });
+  it("wants a major.minor shape, not a bare number", () => {
     expect(parseBashMajor("release (1)")).toBeUndefined();
     expect(parseBashMajor("bash-5.2")).toBeUndefined();
+    expect(parseBashMajor("10 things happened")).toBeUndefined();
+  });
+  it("reads the first non-empty line, so gating and doctor can never disagree", () => {
+    // Both `hasBash` and `bashCheckResult` parse the raw probe stdout through here, so
+    // the line choice has to live in one place: a leading blank line must not make one
+    // of them see a version the other does not.
+    expect(parseBashMajor("\n5.2.37(1)-release\n")).toBe(5);
+    expect(parseBashMajor("5.2.37(1)-release\ntrailing junk")).toBe(5);
   });
   it("survives a leading date rather than parsing it as a version", () => {
     expect(parseBashMajor("2026-08-20")).toBeUndefined();
-    expect(parseBashMajor("2026-08-20 5.2.37(1)-release")).toBe(5);
+    expect(parseBashMajor("2026.08.20")).toBeUndefined();
+  });
+});
+
+describe("versionLine", () => {
+  it("is the single line both the gate and the report use", () => {
+    expect(versionLine("5.2.37(1)-release\n")).toBe("5.2.37(1)-release");
+    expect(versionLine("\n\n  5.2.37(1)-release  \nnoise")).toBe("5.2.37(1)-release");
+    expect(versionLine("")).toBe("");
+    // \r survives the split and must not reach the report.
+    expect(versionLine("5.2.37(1)-release\r\nmore")).toBe("5.2.37(1)-release");
   });
 });
 
@@ -225,10 +254,14 @@ describe("bashCommand", () => {
     expect(bashCommand()).toBe(first);
     expect(bashCommandDetailed()?.command).toBe(first);
   });
-  it("does not answer from the cache for an injected env", () => {
-    expect(bashCommand({ ATROPHY_BASH: "/injected/bash" })).toBe("/injected/bash");
-    // ... and that injection did not poison the process-wide answer.
-    expect(bashCommand()).toBe(bashCommand(process.env));
+  it("does not answer from the cache for an injected env, in either direction", () => {
+    // Captured before any injection: comparing two post-injection reads would compare
+    // the poisoned cache with itself and pass either way.
+    const before = bashCommand();
+    expect(bashCommand({ ATROPHY_BASH: "/injected/a" })).toBe("/injected/a");
+    // A second injected env proves the injected answer is not cached either.
+    expect(bashCommand({ ATROPHY_BASH: "/injected/b" })).toBe("/injected/b");
+    expect(bashCommand()).toBe(before);
   });
   it("probes for bash once and caches that too", () => {
     const first = hasBash();

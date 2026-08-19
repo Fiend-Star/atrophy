@@ -38,11 +38,16 @@ const WELL_KNOWN_WIN32 = [
 const POSIX_BASH = "/bin/bash";
 
 /**
- * The set of external commands a shell drill may assume (P14: the intersection of what
- * Git Bash's `usr/bin` ships with a normal POSIX box). A `command not found` naming one
- * of these is a broken toolchain - a harnessError, never a score against the user -
- * while one naming anything else is an ordinary failure: the drill reached for a tool
- * the contract does not provide.
+ * The set of external commands a shell drill may assume: P14's inventory of Git Bash's
+ * `usr/bin`, which is the scarcer of the two toolchains CI runs (the ubuntu leg has GNU
+ * coreutils, so anything here resolves there too). A `command not found` naming one of
+ * these is a broken toolchain - a harnessError, never a score against the user - while
+ * one naming anything else is an ordinary failure: the drill reached for a tool the
+ * contract does not provide.
+ *
+ * No claim is made about macOS or BSD, which CI does not cover: `tac` is GNU-only there,
+ * and `stat`/`readlink` take incompatible flags. A Homebrew-bash macOS user clears
+ * MIN_BASH_MAJOR and would reach this content.
  *
  * Notable absences, all verified missing from Git Bash's `usr/bin`: `jq`, `python`,
  * `curl` (it lives in `mingw64/bin`), and `rev`.
@@ -102,18 +107,38 @@ export function missingBashHint(cmd?: string): string {
 }
 
 /**
- * The major from `echo $BASH_VERSION` ("5.2.37(1)-release" -> 5), and from the sentence
- * `bash --version` prints ("GNU bash, version 5.2.37(1)-release ..." -> 5).
+ * The major from `echo $BASH_VERSION` ("5.2.37(1)-release" -> 5).
  *
- * Same anchoring as `parseJavaMajor`, for the same two reasons: the token must start at
- * a boundary, so the build number in "(1)-release" is not a candidate and "bash-5.2"
- * does not read as version 5; and the 3-digit cap keeps a line opening with a date
- * (2026-08-20) from parsing as version 2026. A shell that is not bash prints an empty
- * `$BASH_VERSION`, which yields undefined - and `hasBash` treats that as "not bash".
+ * This is a gate, not a convenience parser, so it is strict in a way `parseJavaMajor`
+ * need not be: the output's first non-empty line must *begin* with a `major.minor`
+ * token. Finding a number anywhere in the output is not good enough, because the most
+ * likely wrong `ATROPHY_BASH` on Windows is `cmd.exe` - which ignores `-c`, prints
+ * "Microsoft Windows [Version 10.0.26200.9168]", and exits 0. A lenient scan reads that
+ * as bash 10 and opens the gate to a program that would grade every shell drill while
+ * emitting no `command not found` for the harnessError signature to catch.
+ *
+ * Consequences of leading, all deliberate: the build number in "(1)-release" is never a
+ * candidate, "bash-5.2" does not read as 5, a line opening with a date does not parse
+ * (the 3-digit cap makes "2026." fail too), and bash's own `--version` sentence form is
+ * rejected - no call site passes it, and a false "not bash" only hides drills while a
+ * false "bash" corrupts ratings.
+ *
+ * Reading the first non-empty *line* rather than the whole string is what keeps
+ * `hasBash` and doctor's `bashCheckResult` in lockstep: both parse the raw probe stdout
+ * through here, so neither can see a version the other misses.
  */
 export function parseBashMajor(out: string): number | undefined {
-  const m = /(?:^|[\s"])(\d{1,3})(?=[.\-"\s]|$)/.exec(out);
+  const m = /^(\d{1,3})\.\d/.exec(versionLine(out));
   return m ? Number.parseInt(m[1]!, 10) : undefined;
+}
+
+/**
+ * The one line of a probe's output that counts as its version - shared with doctor so
+ * the line it *prints* is exactly the line the gate *judged*, and so one row of the
+ * report stays one line whatever the probed program decided to say.
+ */
+export function versionLine(out: string): string {
+  return out.split("\n").find((line) => line.trim() !== "")?.trim() ?? "";
 }
 
 export interface BashResolveDeps {
@@ -153,6 +178,8 @@ function gitBashFrom(execPath: string): string {
 /**
  * Resolve bash by the discovery order, with every host interaction injectable. Uncached:
  * `bashCommandDetailed` is the cached front door, and `doctor` wants a fresh answer.
+ * On win32 each call may spawn `git --exec-path`, so anything on a hot path - grading a
+ * multi-case drill, say - must draw from `bashCommand()` rather than from here.
  *
  * `ATROPHY_BASH` is taken verbatim (the `ATROPHY_PYTHON` shape - one binary, no `bin/`
  * layout to derive), including when it does not exist: it is the escape hatch for MSYS2,

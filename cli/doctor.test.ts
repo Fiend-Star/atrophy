@@ -195,6 +195,25 @@ describe("bashCheckResult", () => {
     expect(r.detail).toMatch(/ATROPHY_BASH/);
   });
 
+  it("refuses to call a runnable non-bash a bash", () => {
+    // ATROPHY_BASH=cmd.exe: exits 0, prints a banner containing "10". A green line here
+    // would be the lying diagnostic this check exists to prevent - and once selection
+    // gates on hasBash(), cmd.exe would be grading drills.
+    const r = bashCheckResult(
+      { command: "C:\\WINDOWS\\system32\\cmd.exe", rule: "$ATROPHY_BASH" },
+      "Microsoft Windows [Version 10.0.26200.9168]\r\n(c) Microsoft Corporation.\r\n\r\nC:\\x>",
+    );
+    expect(r.status).toBe("warn");
+    expect(r.detail).not.toContain("GNU bash");
+  });
+
+  it("keeps the detail to one line so a chatty probe cannot break the report table", () => {
+    const r = bashCheckResult(gitBash, "5.2.37(1)-release\nand then some\nmore");
+    expect(r.status).toBe("pass");
+    expect(r.detail).not.toContain("\n");
+    expect(r.detail).toContain("5.2.37(1)-release");
+  });
+
   it("warns on a version it cannot read, because that is what hasBash() gates on", () => {
     // Unlike javaCheckResult, which passes an unparseable version: hasBash() requires a
     // major at or above the floor, so a silent $BASH_VERSION really does hide drills.
