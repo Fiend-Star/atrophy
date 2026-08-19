@@ -255,6 +255,23 @@ twice to prove it builds the same database both times, and for each such
 exercise it synthesizes the hardcoded-literal answer and requires that it
 fail at least one case - a question one literal could answer cannot merge.
 
+Shell write exercises (`"language": "shell"`, `"kind": "write"`) carry
+`shellCases`. Each case is a world of its own: a `files` map of relative
+paths to contents staged into a fresh directory, the `args` the script is
+called with, and the exact `expectedStdout` and exit status running it must
+produce. Two cases have to differ in that pair, so a script that prints one
+answer cannot pass. The answer itself ships beside the exercise as
+`<id>.reference.sh` - a real script rather than a JSON string, so it stays
+readable and runs by hand. CI grades that reference by really running it
+under bash and requires a perfect score, grades it a second time and requires
+byte-identical results, and synthesizes the script that echoes case 1's
+expected output and requires that it fail at least one case. It also lints
+every shipped script for what would grade differently on two machines:
+backgrounding, absolute paths, `$RANDOM`/`$$`/the clock, and any command
+outside the pinned toolchain in `engine/bashtool.ts`. Shell drills need bash
+≥ 4 (Git for Windows ships one); a host without it is offered the rest of the
+bank instead of being nagged.
+
 Roadmap: LLM-judged decomposition drills, more languages, spaced-repetition
 scheduling (FSRS), per-axis leaderboards. More to be added soon.
 
