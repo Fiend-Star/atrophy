@@ -8,6 +8,7 @@ import pc from "picocolors";
 import { LANGUAGES, loadBank, loadBankDetailed, type Axis, type CodeExercise, type Language } from "../bank/schema.js";
 import {
   MIN_BASH_MAJOR,
+  bashCommand,
   missingBashHint,
   parseBashMajor,
   resolveBash,
@@ -16,6 +17,7 @@ import {
 } from "../engine/bashtool.js";
 import { grade, pythonCommand, solutionFileName } from "../engine/grader.js";
 import { MIN_JDK_MAJOR, javacCommand, missingJdkHint, parseJavaMajor } from "../engine/javatool.js";
+import type { HiddenByToolchain } from "../engine/select.js";
 import { Store } from "../store/db.js";
 import { readConfig } from "./config.js";
 import { DEFAULT_LEADERBOARD_URL, syncDisabled } from "./publish.js";
@@ -198,18 +200,77 @@ export function checkBash(): CheckResult {
 }
 
 /**
- * The line a drill prints when a missing JDK shrank the pool it drew from - or null
- * when this user should not hear it. Only a `--lang java` request should: for a python
- * or JS drill, hidden java content is noise about drills the user never asked for, and
- * a JDK-less host would repeat it on every single drill.
+ * The two toolchains selection can hide content behind, as the CLI has to talk about
+ * them: whose drills they are, and what a user is told is missing. Keyed by
+ * `HiddenByToolchain`, so a third toolchain cannot be added to the engine without a
+ * type error here - the narrowing is never allowed to go unreported.
+ */
+const TOOLCHAIN_LABELS: Record<
+  keyof HiddenByToolchain,
+  { language: Language; missing: string; hint: () => string }
+> = {
+  // The hints are thunks: resolving bash can spawn `git --exec-path`, and a host that
+  // hid nothing should not pay for a message it will never print.
+  jdk: { language: "java", missing: "no JDK found", hint: () => missingJdkHint(javacCommand()) },
+  bash: { language: "shell", missing: "no bash found", hint: () => missingBashHint(bashCommand()) },
+};
+
+/**
+ * Reporting order for anything that names more than one - the order `hiddenByToolchain`
+ * attributes in. Derived from the labels above, so a toolchain added to the engine's
+ * breakdown lands here by the type error the record raises, not by being remembered.
+ */
+const TOOLCHAINS = Object.keys(TOOLCHAIN_LABELS) as (keyof HiddenByToolchain)[];
+
+/**
+ * The line a drill prints when a missing toolchain shrank the pool it drew from - or
+ * null when this user should not hear it. Only the user who asked for that toolchain's
+ * language should: for a python or JS drill, hidden java content is noise about drills
+ * the user never asked for, and a JDK-less host would repeat it on every single drill.
+ * The two never speak for each other either - a `--lang java` user hears nothing about
+ * hidden shell drills.
  *
  * An *empty* pool is a different message with a different rule: `drillOnce` reports
- * that one whatever the language, because "no exercises in the bank" would be a lie
- * when the drills are there and only ungradable.
+ * that one whatever the language (via `toolchainGaps`), because "no exercises in the
+ * bank" would be a lie when the drills are there and only ungradable.
  */
-export function hiddenJavaNotice(hidden: number, axis: Axis, language?: Language): string | null {
-  if (hidden <= 0 || language !== "java") return null;
-  return `note: ${hidden} java drill(s) for "${axis}" are hidden - no JDK found (run \`atrophy doctor\`)`;
+export function hiddenToolchainNotice(hidden: HiddenByToolchain, axis: Axis, language?: Language): string | null {
+  for (const tool of TOOLCHAINS) {
+    const label = TOOLCHAIN_LABELS[tool];
+    if (hidden[tool] > 0 && language === label.language) {
+      return `note: ${hidden[tool]} ${label.language} drill(s) for "${axis}" are hidden - ${label.missing} (run \`atrophy doctor\`)`;
+    }
+  }
+  return null;
+}
+
+/** One missing toolchain, as the empty-pool error says it: the fix, and what it costs. */
+export interface ToolchainGap {
+  /** How to get the toolchain (or point Atrophy at one). */
+  hint: string;
+  /** What this host is losing on this axis without it. */
+  detail: string;
+}
+
+/**
+ * Every toolchain that hid something here, in attribution order. The empty-pool error
+ * prints all of them: unlike the notice above it is language-agnostic on purpose, since
+ * "no exercises in the bank" would be a lie whichever language was asked for - but it
+ * still names the *right* toolchain, so a host that only lacks bash is never told to go
+ * install a JDK. Empty when the toolchains hid nothing (the pool is genuinely bare).
+ */
+export function toolchainGaps(hidden: HiddenByToolchain, axis: Axis): ToolchainGap[] {
+  const gaps: ToolchainGap[] = [];
+  for (const tool of TOOLCHAINS) {
+    const n = hidden[tool];
+    if (n <= 0) continue;
+    const { language, hint } = TOOLCHAIN_LABELS[tool];
+    gaps.push({
+      hint: hint(),
+      detail: `(${n} ${language} drill(s) for "${axis}" need it - run \`atrophy doctor\` for the full check)`,
+    });
+  }
+  return gaps;
 }
 
 /** SQLite's own version, from a real query - which also proves the native addon loaded. */

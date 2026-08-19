@@ -12,7 +12,6 @@ import { autoSync, isRegistered, maybePrintPublishHint, publishCommand } from ".
 import { configLanguages, configPath, configTrack, packDirs } from "./config.js";
 import { findTrack, resolveTracks, type Track } from "./tracks.js";
 import { detectAssistants } from "../engine/guard.js";
-import { javacCommand, missingJdkHint } from "../engine/javatool.js";
 import {
   availableAxes,
   hiddenByLanguages,
@@ -32,7 +31,7 @@ import {
   type RatingState,
 } from "../engine/scoring.js";
 import { Store, defaultDbPath } from "../store/db.js";
-import { hiddenJavaNotice, runDoctor } from "./doctor.js";
+import { hiddenToolchainNotice, runDoctor, toolchainGaps } from "./doctor.js";
 import { reportCommand } from "./report.js";
 import { setupAction, type SetupFlags } from "./setup.js";
 
@@ -256,24 +255,24 @@ export async function drillOnce(
         );
       }
     }
-    // Selection hides java drills a JVM would have to grade when there is no JDK. For
-    // the user who asked for java that must never be silent: it shrinks the pool they
-    // are measured on, and when it empties the pool entirely "no exercises in the bank"
-    // would be a flat lie. (`hiddenJavaNotice` owns who hears which of the two.)
+    // Selection hides the drills this host cannot grade: java content a JVM would have
+    // to run with no JDK, shell scripts with no bash. For the user who asked for that
+    // language it must never be silent - it shrinks the pool they are measured on, and
+    // when it empties the pool entirely "no exercises in the bank" would be a flat lie.
+    // (`hiddenToolchainNotice` owns who hears which of the two, and each message names
+    // the toolchain actually to blame.)
     const hidden = hiddenByToolchain(pick);
     ex = selectExercise(pick);
     if (!ex) {
-      if (hidden > 0) {
-        console.error(
-          pc.yellow(missingJdkHint(javacCommand())) +
-            pc.dim(`\n  (${hidden} java drill(s) for "${axis}" need it - run \`atrophy doctor\` for the full check)`),
-        );
+      const gaps = toolchainGaps(hidden, axis);
+      if (gaps.length > 0) {
+        for (const gap of gaps) console.error(pc.yellow(gap.hint) + pc.dim(`\n  ${gap.detail}`));
         return false;
       }
       console.error(pc.red(`no exercises in the bank for axis "${axis}"${flags.lang ? ` (${flags.lang})` : ""} yet`));
       return false;
     }
-    const notice = hiddenJavaNotice(hidden, axis, language);
+    const notice = hiddenToolchainNotice(hidden, axis, language);
     if (notice) console.log(pc.yellow(notice));
   }
 

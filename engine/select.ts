@@ -1,5 +1,6 @@
 import type { ExerciseGenerator } from "../bank/generators/types.js";
-import { AXES, spawnsJvm, type Axis, type Exercise, type Language } from "../bank/schema.js";
+import { AXES, spawnsJvm, spawnsShell, type Axis, type Exercise, type Language } from "../bank/schema.js";
+import { hasBash } from "./bashtool.js";
 import { hasJdk } from "./javatool.js";
 import { hexSeed, type Rng } from "./rng.js";
 import { expectedScore } from "./scoring.js";
@@ -90,12 +91,16 @@ function cappedLanguages(recentLanguages: readonly (Language | "any")[]): Set<La
 /** Which graders this host can actually run. Injected so tests never probe. */
 export interface Toolchains {
   jdk: boolean;
+  bash: boolean;
 }
 
-/** The real probe; `hasJdk` caches its one spawn per process. */
+/** The real probe; `hasJdk`/`hasBash` each cache their one spawn per process. */
 function hostToolchains(): Toolchains {
-  return { jdk: hasJdk() };
+  return { jdk: hasJdk(), bash: hasBash() };
 }
+
+/** A host with everything installed - the "what could ever be offered" arm below. */
+const EVERY_TOOLCHAIN: Toolchains = { jdk: true, bash: true };
 
 /**
  * What selection needs to know about a candidate before it exists: an exercise carries
@@ -107,16 +112,41 @@ interface Candidate {
 }
 
 /**
+ * Every toolchain gate, in the order a hidden drill is attributed to one (see
+ * `hiddenByToolchain`). One table drives both the gate and the accounting, so a third
+ * toolchain lands in both at once rather than in the gate alone.
+ *
+ * Only java drills whose grading starts a JVM need the JDK - write/fix/harness compile
+ * and run, predict-output goes through the source launcher. Only a shell `write` needs
+ * bash: it is shell's one graded-code kind, and grading it means running the script.
+ * Without the toolchain those drills grade as a harnessError, which records nothing, so
+ * offering them only wastes the user's time. A java or shell cloze is string-matched
+ * in-process and stays on offer, as does everything python, JS and sql (sql rides the
+ * bundled better-sqlite3).
+ */
+const TOOLCHAIN_GATES = [
+  { tool: "jdk", needs: (c: Candidate) => c.language === "java" && spawnsJvm(c.kind) },
+  { tool: "bash", needs: (c: Candidate) => c.language === "shell" && spawnsShell(c.kind) },
+] as const satisfies readonly { tool: keyof Toolchains; needs: (c: Candidate) => boolean }[];
+
+/** Can this host grade the candidate at all? Every gate it trips has to be satisfied. */
+function gradable(c: Candidate, toolchains: Toolchains): boolean {
+  return TOOLCHAIN_GATES.every((g) => toolchains[g.tool] || !g.needs(c));
+}
+
+/**
+ * The toolchain to blame for hiding a candidate: the FIRST missing gate it trips, so a
+ * drill needing two absent toolchains is billed to one bucket rather than to both.
+ * `undefined` means this host can grade it.
+ */
+function blockedBy(c: Candidate, toolchains: Toolchains): keyof Toolchains | undefined {
+  return TOOLCHAIN_GATES.find((g) => !toolchains[g.tool] && g.needs(c))?.tool;
+}
+
+/**
  * One offer rule for both entry points: the requested language must match ("any"
  * content matches every request), this host must be able to grade it, and (absent
  * an explicit language) it must be on the allowlist.
- *
- * Only java drills whose grading starts a JVM need the JDK - write/fix/harness compile
- * and run, predict-output goes through the source launcher. Without one, the first
- * group grades as a harnessError and the second dies as a snippet-run error; neither
- * records anything, so offering the drill only wastes the user's time. A java cloze is
- * string-matched in-process and stays on offer, as does everything python, JS and sql
- * (sql rides the bundled better-sqlite3).
  *
  * The allowlist only applies when `language` is undefined: an explicit --lang is the
  * user steering, same rule as the mix soft-cap, and it bypasses the allowlist outright.
@@ -129,7 +159,6 @@ function offerable(
   allowed?: Language[],
 ): boolean {
   const matchesLang = language === undefined || c.language === language || c.language === "any";
-  const needsJdk = c.language === "java" && spawnsJvm(c.kind);
   if (
     language === undefined &&
     allowed !== undefined &&
@@ -139,7 +168,7 @@ function offerable(
   ) {
     return false;
   }
-  return matchesLang && (!needsJdk || toolchains.jdk);
+  return matchesLang && gradable(c, toolchains);
 }
 
 export interface SelectOptions {
@@ -254,28 +283,44 @@ export function availableAxes(
   );
 }
 
+/** How many candidates each missing toolchain hid, one bucket per toolchain. */
+export type HiddenByToolchain = Record<keyof Toolchains, number>;
+
 /**
  * How many candidates for this axis the host's missing toolchains hid: drills that
- * exist and match the request but cannot be graded here. The CLI prints this so a
- * missing JDK never silently shrinks the pool a user is being measured on.
+ * exist and match the request but cannot be graded here, split by which toolchain is
+ * to blame. The CLI prints this so a missing toolchain never silently shrinks the pool
+ * a user is being measured on - and so it can name the right one, since telling a host
+ * that only lacks bash to install a JDK is its own kind of lie.
+ *
+ * Every hidden drill lands in exactly one bucket: the first gate in `TOOLCHAIN_GATES`
+ * it trips that this host cannot satisfy. No candidate needs two toolchains today
+ * (java content never runs a script, shell content never starts a JVM), so the order is
+ * not yet a judgement call - but one that did would be counted once, by that rule,
+ * rather than inflating both buckets and the total with it.
  */
 export function hiddenByToolchain(
   opts: Pick<SelectOptions, "statics" | "generators" | "axis" | "language" | "toolchains">,
-): number {
+): HiddenByToolchain {
   const { statics, generators = [], axis, language, toolchains = hostToolchains() } = opts;
-  const hidden = (c: Candidate) =>
-    offerable(c, language, { jdk: true }) && !offerable(c, language, toolchains);
-  return (
-    statics.filter((e) => e.axis === axis && hidden(e)).length +
-    generators.filter((g) => g.axis === axis && hidden(g)).length
-  );
+  const hidden: HiddenByToolchain = { jdk: 0, bash: 0 };
+  const tally = (c: Candidate) => {
+    // The two-arm shape: what a fully equipped host would offer, minus what this one can.
+    if (!offerable(c, language, EVERY_TOOLCHAIN)) return;
+    const tool = blockedBy(c, toolchains);
+    if (tool) hidden[tool]++;
+  };
+  for (const e of statics) if (e.axis === axis) tally(e);
+  for (const g of generators) if (g.axis === axis) tally(g);
+  return hidden;
 }
 
 /**
  * How many candidates for this axis the language allowlist hid: drills that would be
  * offerable without it but are excluded once it applies. Mirrors `hiddenByToolchain`'s
- * two-arm shape - both arms use the real toolchains, so a JDK-hidden java write is
- * never counted here too (it was never offerable to begin with).
+ * two-arm shape - both arms use the real toolchains, so a JDK-hidden java write or a
+ * bash-hidden shell write is never counted here too (neither was offerable to begin
+ * with). Each narrowing is reported once, by whichever of the two actually caused it.
  */
 export function hiddenByLanguages(
   opts: Pick<SelectOptions, "statics" | "generators" | "axis" | "toolchains">,

@@ -14,9 +14,10 @@ import {
   checkNode,
   checkPacks,
   checkSql,
-  hiddenJavaNotice,
+  hiddenToolchainNotice,
   javaCheckResult,
   runDoctor,
+  toolchainGaps,
 } from "./doctor.js";
 
 describe("checkNode", () => {
@@ -232,24 +233,72 @@ describe("checkBash", () => {
   });
 });
 
-describe("hiddenJavaNotice", () => {
+describe("hiddenToolchainNotice", () => {
   it("tells a --lang java user how much of the pool the missing JDK took", () => {
-    const notice = hiddenJavaNotice(4, "syntax-recall", "java");
+    const notice = hiddenToolchainNotice({ jdk: 4, bash: 0 }, "syntax-recall", "java");
     expect(notice).toContain("4 java drill(s)");
     expect(notice).toContain("syntax-recall");
     expect(notice).toContain("doctor");
   });
 
-  it("says nothing to a user who never asked for java", () => {
+  it("tells a --lang shell user about bash, never about the JDK", () => {
+    const notice = hiddenToolchainNotice({ jdk: 0, bash: 3 }, "debugging", "shell");
+    expect(notice).toContain("3 shell drill(s)");
+    expect(notice).toContain("debugging");
+    expect(notice).toContain("bash");
+    expect(notice).not.toContain("JDK");
+  });
+
+  it("says nothing to a user who never asked for that language", () => {
     // The drill still runs (python/js content is unaffected); mentioning hidden java
     // would be noise about drills this user never requested. An *empty* pool is a
     // different message, and drillOnce prints that one whatever the language.
-    expect(hiddenJavaNotice(4, "syntax-recall", undefined)).toBeNull();
-    expect(hiddenJavaNotice(4, "syntax-recall", "python")).toBeNull();
+    expect(hiddenToolchainNotice({ jdk: 4, bash: 0 }, "syntax-recall", undefined)).toBeNull();
+    expect(hiddenToolchainNotice({ jdk: 4, bash: 0 }, "syntax-recall", "python")).toBeNull();
+    // and the two toolchains do not speak for each other
+    expect(hiddenToolchainNotice({ jdk: 0, bash: 3 }, "syntax-recall", "java")).toBeNull();
+    expect(hiddenToolchainNotice({ jdk: 4, bash: 0 }, "syntax-recall", "shell")).toBeNull();
   });
 
   it("says nothing when the toolchain hid nothing", () => {
-    expect(hiddenJavaNotice(0, "syntax-recall", "java")).toBeNull();
+    expect(hiddenToolchainNotice({ jdk: 0, bash: 0 }, "syntax-recall", "java")).toBeNull();
+    expect(hiddenToolchainNotice({ jdk: 0, bash: 0 }, "syntax-recall", "shell")).toBeNull();
+  });
+});
+
+describe("toolchainGaps", () => {
+  it("names the JDK for hidden java drills", () => {
+    const gaps = toolchainGaps({ jdk: 2, bash: 0 }, "syntax-recall");
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]!.hint).toContain("ATROPHY_JAVA_HOME");
+    expect(gaps[0]!.detail).toBe(
+      '(2 java drill(s) for "syntax-recall" need it - run `atrophy doctor` for the full check)',
+    );
+  });
+
+  it("names bash for hidden shell drills, and never the JDK", () => {
+    const gaps = toolchainGaps({ jdk: 0, bash: 5 }, "debugging");
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]!.hint).toContain("ATROPHY_BASH");
+    expect(gaps[0]!.hint).not.toContain("JDK");
+    expect(gaps[0]!.detail).toBe(
+      '(5 shell drill(s) for "debugging" need it - run `atrophy doctor` for the full check)',
+    );
+  });
+
+  it("names both when both toolchains hid something", () => {
+    const gaps = toolchainGaps({ jdk: 1, bash: 2 }, "code-reading");
+    expect(gaps).toHaveLength(2);
+    expect(gaps.map((g) => g.detail)).toEqual([
+      '(1 java drill(s) for "code-reading" need it - run `atrophy doctor` for the full check)',
+      '(2 shell drill(s) for "code-reading" need it - run `atrophy doctor` for the full check)',
+    ]);
+    expect(gaps[0]!.hint).toContain("ATROPHY_JAVA_HOME");
+    expect(gaps[1]!.hint).toContain("ATROPHY_BASH");
+  });
+
+  it("is empty when nothing was hidden", () => {
+    expect(toolchainGaps({ jdk: 0, bash: 0 }, "syntax-recall")).toEqual([]);
   });
 });
 

@@ -24,7 +24,7 @@ const bank = loadBank(join(here, "..", "bank", "exercises"));
 // README describes what the bank can offer, not one reader's toolchain - a JDK-less
 // reader still gets told Java content exists (`atrophy doctor` is what reports what a
 // missing toolchain hides locally). Every fact below assumes every toolchain present.
-const FULL_TOOLCHAIN = { jdk: true };
+const FULL_TOOLCHAIN = { jdk: true, bash: true };
 
 /**
  * mirrors README's five-skills table — update BOTH together. One entry per axis: the
