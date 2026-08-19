@@ -1,75 +1,96 @@
-# Expansion-4: HRT ETSE pack + shell knowledge language — Implementation Plan
+# Expansion-4: HRT ETSE pack + shell graded language — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Widen `LANGUAGES` with knowledge-only `"shell"`, then ship `atrophy-pack-hrt` (~200–215 drills, the program's first Python content) from the HrtEtse corpus survey's enumeration.
+**Goal:** Ship `shell` as a full graded language (knowledge + real execution, Design B) and `atrophy-pack-hrt` (~230–250+ drills including every viable executable-shell row from two surveys), plus the E2/E3 residual closure — nothing deferred (user order 2026-08-20).
 
-**Architecture:** One small engine task on a new atrophy branch, then the E3 roster-first content pipeline on Java-OAs with E2's worktree-per-wave machinery. Six topic waves, consistency task, Fable final.
+**Architecture:** Five serial engine tasks on atrophy `feat/shell-language`, a supplementary executable-shell survey in parallel (read-only), then the roster-first content pipeline on Java-OAs with worktree-per-wave parallelism (≤3 concurrent). Executable-shell waves dispatch only after the engine merges.
 
-**Tech Stack:** TypeScript/zod (schema), vitest, the existing CLI grading paths (python/node/sql in-process + subprocess), JSON exercise bank.
+**Tech Stack:** TypeScript/zod, vitest, Node `spawn` sandbox (`engine/runner.ts`), Git Bash ≥ 4 discovery, JSON exercise bank.
 
-**Spec:** `docs/superpowers/specs/2026-08-20-expansion-4-hrt-shell-design.md` — the binding authority. The two prework artifacts it cites are evidence, not requirements.
+**Spec:** `docs/superpowers/specs/2026-08-20-expansion-4-hrt-shell-design.md` — binding. Prework artifacts in `.superpowers/sdd/2026-08-19-expansion-4-prework/` are evidence.
 
 ## Global Constraints
 
-- Traveling law: Expansion-2/3 binding rules verbatim (claim-verification gate; no-epsilon exactness; determinism — injected timestamps, canonical orders; leak discipline cross-pack and within-pack; rubric bullets are DISPLAYED per engine/session.ts:540; output-cap conventions).
-- PRIVACY HARD LAW as extended in spec §2 Non-goals: zero-drill zones by file/line; needles = E3 codename set + `Goldman`, `GS compliance`, `hackathon`, `Glassdoor`, `Blind`, `InterviewDB`; no named individuals, attributed quotes, compensation, employment history, or firm business intel; industry-mechanics framing; word-boundary grep mandatory pre-commit on every tracked file AND every report.
-- Execution-derivation gate (spec §5.1): numeric expectations from `04` are computed by running the reference, never transcribed; divergences tabled.
-- Repos: atrophy work on `feat/shell-language` (off `feat/java-language-support`); pack work on Java-OAs master, staging `atrophy-pack-hrt/` paths by name only.
-- Gates: pack-only `ATROPHY_BANK=<pack> npx vitest run bank/bank-integrity.test.ts` from the `feat/shell-language` checkout; merged `atrophy doctor` with all four packs on `ATROPHY_PACKS` (`;`-separated) — expect 639 + roster size, zero collisions, track `hrt` present; CLI re-grades via `npx tsx cli/index.ts drill --exercise <id> --solution <file>` with scratch `ATROPHY_DB` + `ATROPHY_NO_SYNC=1`. Never `npm run dev -- …` (Windows npm eats flags).
-- Quota (spec §6): T1+T2 may run this week after user spec review; waves W1–W6 + final start at the Aug 25 weekly reset. Fan-out protocol binds (ccusage ×1.6; >50% raw = no wave dispatches; ≤3 concurrent worktree waves).
+- Traveling law: E2/E3 binding rules verbatim (claim-verification gate; no-epsilon exactness; determinism; leak discipline; rubric bullets are DISPLAYED per engine/session.ts:540; output-cap conventions).
+- PRIVACY HARD LAW per spec §2 Non-goals: zero-drill zones by file/line; needles = E3 codename set + `Goldman`, `GS compliance`, `hackathon`, `Glassdoor`, `Blind`, `InterviewDB`; no named individuals, attributed quotes, compensation, employment history, firm business intel; industry-mechanics framing; word-boundary grep mandatory pre-commit on every tracked file AND every report.
+- Execution-derivation gate (spec §5.1): every numeric expectation and every `expectedStdout` computed by executing the reference, never transcribed; divergences tabled.
+- Shell determinism laws (spec §4.2–4.5): CR-strip submitted scripts; `SHELL_ENV` pins (`LC_ALL=C`, `LANG=C`, `TZ=UTC`, `MSYS_NO_PATHCONV=1`, `MSYS2_ARG_CONV_EXCL=*`, PATH pinned `dirname(bash)` first); `PINNED_TOOLS` only; no `&`/`disown`/`nohup`, no absolute paths, no `date +%Z`, no `$RANDOM`/`$$`/`$SECONDS`, sorted associative iteration; ≥2 discriminating cases; echo-cheese must fail; P2 command-not-found-on-pinned-tool = harnessError never a score.
+- Repos: atrophy on `feat/shell-language`; pack on Java-OAs master, staged by name. Gates from the `feat/shell-language` checkout: pack-only `ATROPHY_BANK=<pack> npx vitest run bank/bank-integrity.test.ts`; merged `atrophy doctor` with all four packs on `ATROPHY_PACKS` (`;`-separated) — 639 + roster, zero collisions, track `hrt`; re-grades via `npx tsx cli/index.ts drill --exercise <id> --solution <file>` with scratch `ATROPHY_DB` + `ATROPHY_NO_SYNC=1`. Never `npm run dev -- …`.
+- Pacing: fan-out protocol only (ccusage ×1.6; >50% raw = no wave-sized dispatches in-block; ≤3 concurrent worktree waves). Weekly-limit deaths are accepted interruptions; worktrees + ledger make resume cheap.
 
 ---
 
-### Task 1: `shell` joins `LANGUAGES` (knowledge-only)
+### Task 0 (parallel, read-only): Supplementary executable-shell survey
 
-**Files:**
-- Modify: `bank/schema.ts` (line 13 `LANGUAGES`; the cross-field refinement ~185–222)
-- Modify: `cli/setup.test.ts:160, :201` (hardcoded 4-language assertions)
-- Modify: `cli/readme-claims.test.ts` fixture if it pins the language list; `README.md` `--lang` row (same commit)
-- Modify: `engine/grader.ts:43–48` (solution filename map → `solution.sh`), `engine/session.ts:207–214` (comment prefix → `#`)
-- Modify: `CLAUDE.md` (delete the stale "there is no vitest config file" claim)
-- Test: `bank/schema.test.ts` (or the schema tests' actual home — colocated `*.test.ts`)
+**Files:** Create `.superpowers/sdd/2026-08-19-expansion-4-prework/shell-exec-survey.md` (git-ignored workspace artifact).
 
-**Interfaces:**
-- Consumes: nothing new.
-- Produces: `"shell"` as a valid concrete `Language` accepted by `cloze` and `recall` (and the `Language | "any"` shape), **rejected by name** on `write`/`fix`/`predict-output` with an error stating shell code drills await the execution engine. Every wave task relies on this parse behavior.
+**Interfaces:** Produces the extended executable-shell candidate table T6 consumes: slug, topic, source citation, tier, kind=write, fixture sketch, case-discrimination idea, convert-vs-keep call for each §2f knowledge row, dedup against the original 35 and against DE Shaw. Runs concurrently with T1–T5 (no file contention — different repo, read-only).
 
-- [ ] **Step 1: Write the failing tests** — three rejection cases (a shell `write` with `cases`, a shell `fix`, a shell `predict-output` — each expects a parse error whose message names shell and the deferral) and two acceptance cases (a shell `recall`, a shell `cloze` with one blank). Model them on the existing sql-rejection tests beside the refinement's current coverage.
-- [ ] **Step 2: Run to verify they fail** — `npx vitest run bank/schema.test.ts` (rejections fail because `"shell"` is not yet a `Language`; the error is a different one than asserted — that counts as failing).
-- [ ] **Step 3: Implement** — append `"shell"` to `LANGUAGES` at `bank/schema.ts:13`; add the rejection arm in the refinement beside the sql-rejects, same error style; add the `solution.sh` and `#` arms; fix the two `cli/setup.test.ts` assertions (menu now 5 entries; `6` is the out-of-range pick; the `"1,3"` comment survives because shell appended last); update README's `--lang` row and anything `readme-claims` recomputes; correct CLAUDE.md's vitest-config sentence.
-- [ ] **Step 4: Full verification** — `npx vitest run` (entire suite) + `npm run typecheck`. Expected: green, zero java skips if a JDK is present.
-- [ ] **Step 5: Commit** on `feat/shell-language` — `feat(schema): shell as a knowledge-only language`.
+- [ ] Mine `04` Module 1 (all challenges + sed/find/links/process material), `03` Part 11 (~1,150 lines), `02` Part A Q1–Q35 + gap fillers, `08` §2, `06` §10 ladder + §7 cheat table, `09` Day 1 for every candidate the engine contract can grade (spec §4.1 `shellCases`). Apply the conversion rule (spec §5) to all 82 §2f rows. Honest counts; privacy law binds the artifact too.
 
-### Task 2: Roster + pack scaffold (`atrophy-pack-hrt`)
+### Task 1: Schema — `shell` in `LANGUAGES` + `shellCases` (atrophy)
 
-**Files:**
-- Create: `Java-OAs/atrophy-pack-hrt/pack.json` = `{"name": "hrt"}`
-- Create: `Java-OAs/atrophy-pack-hrt/MANIFEST-HRT.md`
+**Files:** Modify `bank/schema.ts` (LANGUAGES :13; codeFields; refinement ~185–222; `TestedExercise`/`CodeExercise` ~238–249; `totalUnits` ~291–309; `spawnsShell` beside `spawnsJvm` ~286–288); `cli/setup.test.ts:160/:201`; `cli/readme-claims.test.ts` + `README.md` (same commit); `engine/grader.ts:43–48` (`solution.sh`); `engine/session.ts:207–214` (`#`); `CLAUDE.md` (stale vitest-config claim). Test: the schema tests' colocated home.
 
-**Interfaces:**
-- Consumes: the survey enumeration (§2 tables, by row number) and spec §5's ten binding laws.
-- Produces: the FINAL roster — per-row: id, kind, axis, language, tier, source citation, wave assignment (W1–W6), and any re-angle/cut ruling with its reason. Every wave task authors exactly its roster rows; deviations require a controller ruling.
+**Interfaces:** Produces the parse contract every later task consumes: shell `write` requires `shellCases` (spec §4.1 shape verbatim — `files?`/`args?`/`expectedStdout`/`expectedExitCode?`, ≥2 cases differing in `(expectedStdout, expectedExitCode)`, relative `files` keys only); shell `fix`/`predict-output` rejected by name; `cloze`/`recall` accept shell; `spawnsShell(kind)` true for `write` only; `totalUnits` = `shellCases.length`.
 
-- [ ] **Step 1: Roster** from the survey's 280 rows minus tier-E (35), applying: dedup rulings (spec §5.5 — 149/237 re-angled as specified, 150/181 cut unless a distinguishably different fact is pinned, language-framing rule on 13/15/11/191/224/62), api-memory ≤ 35% (convert-to-cloze or cut, each with a reason), S6/S10 → predict-output, candidate 12 stdlib-only rewrite noted, candidate 59 reframed per spec §5.7. Target 200–215; the number lands where the rulings land — never pad, never silently drop.
-- [ ] **Step 2: Manifest skeleton** — roster table, conventions section citing the spec, the execution-derivation divergence table (empty, headed), privacy attestation line (grep run, zero hits), wave plan.
-- [ ] **Step 3: Privacy grep** over both files and the report; zero hits required.
-- [ ] **Step 4: Commit** on Java-OAs master, staging the two files by name — `feat(pack): atrophy-pack-hrt scaffold + expansion-4 roster`.
+- [ ] Failing tests first: 3 rejections (shell fix, shell predict-output, shell write with `tests`), 4 acceptances/validations (shell recall; shell cloze; shell write with 2 discriminating cases parses; shell write with identical-expectation cases rejects; absolute/`..` `files` key rejects) → run, verify fail → implement → `npx vitest run` + `npm run typecheck` green → commit `feat(schema): shell language with shellCases write arm`.
 
-### Tasks 3–8: Content waves W1–W6 (worktree-per-wave, ≤3 concurrent, start ≥ Aug 25 reset)
+### Task 2: Toolchain — `engine/bashtool.ts` + doctor (atrophy)
 
-**Files per wave:** Create `Java-OAs/atrophy-pack-hrt/exercises/<axis>/<id>.json` for exactly the wave's roster rows; stamp only its own manifest rows.
+**Files:** Create `engine/bashtool.ts` + `engine/bashtool.test.ts`; modify `cli/doctor.ts` (add `checkBash`, register in `runDoctor` ~426–437).
 
-**Interfaces:** Consumes Task 1's parse behavior (shell tags), Task 2's roster rows verbatim, and the spec's content laws. Produces gate-green drills: references 1.00 via the real CLI, violators sub-1.00 tabled per claim, pack integrity green, no cross-wave file contention (waves own disjoint exercise files; manifest row-stamping is per-wave by row).
+**Interfaces:** Produces `bashCommand(env)`, `hasBash()` (cached), `parseBashMajor`, `MIN_BASH_MAJOR = 4`, `missingBashHint`, `SHELL_ENV`, `PINNED_TOOLS` (spec §4.2 lists both). Discovery order and never-bare-`bash`-on-win32 per spec §4.2. `checkBash` warns-never-fails and reports resolved path + which discovery rule won.
 
-Wave contents (roster may re-shuffle within reason): **W1** python graded-code — all `fix` + `write` + `predict-output`; every expected value produced by executing the reference (spec §5.1), divergence table appended; S1/S2/S3 recomputation mandatory. **W2** python cloze/recall + probability + amortized-complexity rows. **W3** shell knowledge I (survey §2f first half). **W4** shell knowledge II + shell-tagged networking. **W5** `any` networking + kernel/HFT tuning. **W6** trading-domain + sql `write` (fixtures authored from scratch, ≥2 cases with different rows, cheese-gate aware) + outline (rubrics must not leak sibling recall answers).
+- [ ] Unit tests for `parseBashMajor`, discovery-order resolution (injected fs/env fakes — never probe in unit tests), `SHELL_ENV` contents; doctor render split pure (`bashCheckResult`) → implement → suite green → commit.
 
-Per-wave steps: - [ ] author drills → - [ ] self-grade references 1.00 + violators sub-1.00 through the CLI (scratch DB, NO_SYNC) → - [ ] pack integrity green from the wave worktree → - [ ] privacy grep zero → - [ ] commit (content, then stamps) → controller merges `--no-ff` serially, then execution-verified review + fix rounds per SDD.
+### Task 3: Grader — `gradeShell` (atrophy)
 
-### Task 9: Build status + consistency
+**Files:** Modify `engine/grader.ts` (gradeShell + `grade()` dispatch lane ahead of the `isPy` fork); `engine/session.ts` if the loop needs the shell arm surfaced; test in `engine/grader.shell.test.ts` (`describe.skipIf(!hasBash())` with the SKIPPED warning).
 
-- [ ] Bijection roster↔files; stamps → the content SHA; histograms (kind/axis/language/tier) re-derived from shipped JSONs; divergence table complete; merged doctor with all four packs — expected total = 639 + roster size, zero collisions, track `hrt` correct; 3 seeded re-grades with independently written references; build-status section; commit.
+**Interfaces:** Consumes T1's `shellCases` + T2's `bashCommand`/`SHELL_ENV`/`PINNED_TOOLS`. Produces `GradeResult` per spec §4.3: per-case fresh sub-dir, Node-written `files`, CR-stripped script, full `testTimeoutMs` per case, `normalizeOutput` stdout equality + exit code, no whitespace partial credit, named per-case failures with visible truncation, harnessError on spawn failure or the P2 pinned-tool signature, ordinary failure on non-pinned command-not-found.
 
-### Final: Fable whole-branch review (both repos' E4 ranges)
+- [ ] Tests first (behind skipIf): reference pipeline 1.00; wrong-answer sub-1.00 with named case; echo-cheese fails ≥1 case; exit-code mismatch fails; CRLF submission passes (CR-strip proven); fabricated bash path → harnessError; a script invoking a non-pinned tool → ordinary fail not harnessError → implement → suite green (JDK + bash both present locally) → commit.
 
-Privacy sweep headline (spec Non-goals needles over every added line + human read), cross-pack leak sweep (DE Shaw is the hot adjacency — survey §3's strong/moderate zones: state-machine, P&L, SQL buckets), manifest coherence, engine-task re-verification (the three rejections + suite green), sampled re-grades, merged doctor. Verdict gates the push of both repos.
+### Task 4: Selection, gating, CLI reporting (atrophy)
+
+**Files:** Modify `engine/select.ts` (`Toolchains` → `{jdk, bash}`; `hostToolchains`; `offerable` `needsBash`; `hiddenByToolchain` → `{jdk: number, bash: number}` breakdown; `availableAxes`; the full-toolchain arm literal); `cli/index.ts` (empty-pool hint by requested language; shrunken-pool notices); `cli/doctor.ts` notice sibling; tests colocated.
+
+**Interfaces:** Consumes T2's `hasBash`. Produces the honest breakdown with the anti-double-count law extended (one bucket per drill; `hiddenByLanguages` unchanged on real toolchains both arms). Injected `toolchains: {jdk, bash}` everywhere tests touch selection.
+
+- [ ] Tests: bash-less host hides shell `write` but serves shell cloze/recall; breakdown counts each hidden drill exactly once under jdk XOR bash; `--lang shell` empty-pool error names `ATROPHY_BASH`; jdk-only and bash-only hosts each get the right message → implement → suite + typecheck green → commit.
+
+### Task 5: Integrity gates for shell content (atrophy)
+
+**Files:** Modify `bank/bank-integrity.test.ts` (shell suite behind `describe.skipIf(!hasBash())` + SKIPPED warning).
+
+**Interfaces:** Consumes T1–T3. Produces the gates W7+ ships against: reference grades 1.00 by execution; double-run determinism diff; synthesized echo-cheese (case 1's `expectedStdout` verbatim) fails ≥1 case; grep backstop for `&`/`disown`/`nohup`, absolute paths, `date +%Z`, `$RANDOM`/`$$`/`$SECONDS`, non-pinned tools; zero-shell banks pass vacuously EXCEPT the base bank (which ships none — assert that stays true, mirroring the zero-jvm-java precedent inverted).
+
+- [ ] Tests + a temporary in-test fixture exercise (constructed inline, not shipped) proving each gate fires → commit → **push `feat/shell-language`; verify CI green on both OS legs including windows-latest bash discovery without PATH help; if Git for Windows is absent there, add the explicit setup step to `.github/workflows/ci.yml` in a follow-up commit.**
+
+### Task 6: Roster + pack scaffold (Java-OAs)
+
+**Files:** Create `atrophy-pack-hrt/pack.json` = `{"name": "hrt"}`, `MANIFEST-HRT.md`.
+
+**Interfaces:** Consumes both surveys + spec §5 laws. Produces the FINAL roster: per-row id/kind/axis/language/tier/source/wave, re-angle/cut/convert rulings with reasons (dedup rulings spec §5.4; api-memory ≤ 35%; S6/S10 → predict-output; conversion table for §2f rows; executable-shell rows from both surveys). Waves W1–W6 content, W7+ executable shell at ~35 rows/wave.
+
+- [ ] Roster → manifest skeleton (conventions, empty divergence table, privacy attestation) → privacy grep zero → commit staging the two files by name.
+
+### Tasks W1–W8+: Content waves (worktree-per-wave, ≤3 concurrent)
+
+Per spec §5 Waves. W1 python graded-code (execution-derivation wave; S1/S2/S3 recompute mandatory); W2 python cloze/recall + probability; W3/W4 shell knowledge I/II (+shell-tagged networking); W5 `any` networking + kernel/HFT; W6 trading + sql (fixtures from scratch, ≥2 differing cases) + outline; W7+ executable shell — **only after T1–T5 merged**, each wave gates with real bash from its worktree.
+
+Per wave: - [ ] author exactly its roster rows → - [ ] self-grade references 1.00 + violators sub-1.00 via CLI (scratch DB, NO_SYNC) → - [ ] pack integrity green from the worktree → - [ ] privacy grep zero → - [ ] commit content then stamps → controller merges `--no-ff` serially → execution-verified review + fix rounds.
+
+### Task 14: E2/E3 residual closure (Java-OAs `atrophy-pack/`, `atrophy-pack-amazon/`)
+
+- [ ] Fix stale DSA-manifest line-citations (1993–1995/1888); add expansion-2 stamp form to the build-status legend; add dp-15 Q10/Q12 interval-DP note; recut `rm-dup-ii`; harden single-witness fixtures; fold the twin-gate-table maintenance note into MANIFEST-AMAZON.md. Re-gate every touched drill (integrity + re-grade); privacy grep; commit per pack.
+
+### Task 15: Build status + consistency
+
+- [ ] Bijection roster↔files; stamps → content SHA; four histograms re-derived from shipped JSONs; divergence + conversion tables complete; merged doctor all four packs (639 + roster, zero collisions, `hrt` correct); 3+ seeded re-grades incl. one executable-shell row with an independently written reference; build-status; commit.
+
+### Final: Fable whole-branch review — both repos
+
+Privacy sweep headline (needles + human read over every added line); cross-pack leak sweep (DE Shaw hot zones: state-machine, P&L, SQL buckets, plus the four re-angled rows); manifest coherence; engine re-verification (rejections, gradeShell invariants, breakdown counts, CI state); sampled re-grades; merged doctor. Verdict gates the push of both repos and PR-body updates.
