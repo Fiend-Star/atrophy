@@ -384,57 +384,114 @@ const blankSpan = (chunk: string) => chunk.replace(/[^\n]/g, " ");
 /** `$(( … ))` out: a bitwise `&` in arithmetic is not a backgrounding `&`. */
 const stripArithmetic = (s: string) => s.replace(/\$\(\([^)]*\)\)/g, blankSpan);
 
-/**
- * Heredoc bodies out: they are data, and a `curl` inside one is a string, not a call.
- * The delimiter is taken from the `<<` line and the body blanked up to it.
- */
-function stripHeredocs(s: string): string {
-  const lines = s.split("\n");
-  const out: string[] = [];
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i]!;
-    out.push(line);
-    const opener = /<<-?\s*(?:'([^']+)'|"([^"]+)"|\\?([A-Za-z_][A-Za-z0-9_]*))/.exec(line);
-    const delimiter = opener?.[1] ?? opener?.[2] ?? opener?.[3];
-    if (!delimiter) continue;
-    while (i + 1 < lines.length) {
-      i += 1;
-      // The closing delimiter is blanked with the body: on its own line it is a word in
-      // command position, and left standing it reads as a call to a command named EOF.
-      const done = lines[i]!.trim() === delimiter;
-      out.push("");
-      if (done) break;
-    }
-  }
-  return out.join("\n");
+interface LiteralOptions {
+  /** "both" leaves only syntax; "single" keeps double-quoted text, where expansions happen. */
+  quotes: "both" | "single";
+  /** Which heredoc bodies to blank - see the family table below for why that differs. */
+  heredocs: "all" | "quoted-delimiter";
 }
 
 /**
- * Quoted spans out. What survives is roughly the shell's *syntax*: separators, redirects
- * and command names, with every string literal blanked. This is what makes the command
- * scan below safe on real content - `sed 's/x/&/'` carries no `&` once the quotes are
- * gone, and an awk program is not a pile of unknown commands.
+ * One small lexer for the three things bash treats as literal - quoted spans, heredoc
+ * bodies and comments - because they nest, and a pipeline of independent passes gets that
+ * wrong in both directions. Two orderings were tried and both were bugs: stripping
+ * heredocs first reads a `<<` *inside a string* as an opener and blanks to end of file,
+ * and stripping quotes first erases the `'EOF'` a heredoc's own delimiter is spelled with.
+ * Scanning once, with the state, is the only order that has neither problem.
  *
- * One exception, and it is the common case rather than a corner: a `$( … )` inside double
- * quotes is *code*, not text. `"$(wc -l < in.txt)"` runs wc, so blanking it with the rest
- * of the string would hide every command a script writes that way - which is most of them.
- * Single quotes have no such carve-out: nothing inside them runs.
+ * Comments are handled here too, for the same reason: a lone apostrophe in a `# don't`
+ * comment would otherwise open a quote that never closes and blank the rest of the file.
+ *
+ * `quotes: "both"` leaves roughly the shell's *syntax* - separators, redirects and command
+ * names - which is what makes the command scan safe on real content: `sed 's/x/&/'` carries
+ * no `&` once the quotes are gone, and an awk program is not a pile of unknown commands.
+ * `quotes: "single"` blanks only what bash guarantees is literal, which is what the
+ * expansion needles need: `"$RANDOM"` in double quotes still expands and must still be read.
+ *
+ * The one carve-out, and it is the common case rather than a corner: a `$( … )` inside
+ * double quotes is *code*. `"$(wc -l < in.txt)"` runs wc, so blanking it with the rest of
+ * the string would hide the way most scripts spell a call. Single quotes get no carve-out -
+ * nothing inside them runs.
+ *
+ * Every blanked region keeps its newlines, so a reported line number is the file's own.
  */
-function stripQuoted(s: string): string {
-  // "normal" is top level, "subst" is inside a `$( … )` (its `)` returns to the frame
-  // below), and the two quote frames differ in exactly the carve-out above.
+function stripShellLiterals(s: string, opts: LiteralOptions): string {
+  // "normal" is top level, "subst" is inside a `$( … )` whose `)` returns to the frame below.
   const stack: ("normal" | "subst" | "sq" | "dq")[] = ["normal"];
+  /** Heredocs opened on the line being scanned; their bodies start after its newline. */
+  let pending: { delimiter: string; blank: boolean }[] = [];
   let out = "";
   let i = 0;
+
+  /** Copy or blank one whole line, and return the index just past its newline. */
+  const takeLine = (from: number, blank: boolean): number => {
+    const eol = s.indexOf("\n", from);
+    const end = eol === -1 ? s.length : eol;
+    const line = s.slice(from, end);
+    out += blank ? blankSpan(line) : line;
+    if (eol === -1) return s.length;
+    out += "\n";
+    return eol + 1;
+  };
+
   while (i < s.length) {
     const top = stack[stack.length - 1]!;
     const ch = s[i]!;
     const code = top === "normal" || top === "subst";
+    const keep = code || (top === "dq" && opts.quotes === "single");
+
+    // A newline with heredocs queued: their bodies are the lines that follow, in order.
+    if (ch === "\n" && pending.length > 0) {
+      out += "\n";
+      i += 1;
+      for (const doc of pending) {
+        for (;;) {
+          if (i >= s.length) break;
+          const eol = s.indexOf("\n", i);
+          const closing = s.slice(i, eol === -1 ? s.length : eol).trim() === doc.delimiter;
+          // The closing delimiter goes with the body whatever the body's fate: alone on a
+          // line it is a word in command position, and left standing it reads as a call to
+          // a command named EOF.
+          i = takeLine(i, doc.blank || closing);
+          if (closing) break;
+        }
+      }
+      pending = [];
+      continue;
+    }
+
     if (top !== "sq" && ch === "\\") {
       out += ` ${s[i + 1] === "\n" ? "\n" : " "}`;
       i += 2;
       continue;
     }
+
+    // `<<` in command position opens a heredoc; `<<<` is a herestring and opens nothing.
+    if (code && ch === "<" && s[i + 1] === "<" && s[i + 2] !== "<") {
+      const opener = /^<<-?[ \t]*(?:'([^'\n]*)'|"([^"\n]*)"|(\\?)([A-Za-z_][A-Za-z0-9_]*))/.exec(s.slice(i));
+      const delimiter = opener?.[1] ?? opener?.[2] ?? opener?.[4];
+      if (opener && delimiter) {
+        // A quoted delimiter (`<<'EOF'`) makes the body literal; an unquoted one expands it,
+        // which is exactly the difference the "quoted-delimiter" mode is about.
+        const quoted = opener[1] !== undefined || opener[2] !== undefined || opener[3] === "\\";
+        pending.push({ delimiter, blank: opts.heredocs === "all" || quoted });
+        out += blankSpan(opener[0]);
+        i += opener[0].length;
+        continue;
+      }
+    }
+
+    if (code && ch === "#" && (i === 0 || /[\s;|&(]/.test(s[i - 1]!))) {
+      // Blanked up to the newline but never past it: the newline is what drains a heredoc
+      // queued earlier on this same line (`cat <<EOF  # note`), and swallowing it here
+      // would leave the body to be scanned as commands.
+      const eol = s.indexOf("\n", i);
+      const end = eol === -1 ? s.length : eol;
+      out += blankSpan(s.slice(i, end));
+      i = end;
+      continue;
+    }
+
     if ((code || top === "dq") && ch === "$" && s[i + 1] === "(") {
       out += "$(";
       stack.push("subst");
@@ -459,54 +516,91 @@ function stripQuoted(s: string): string {
       i += 1;
       continue;
     }
-    out += code ? ch : blankSpan(ch);
+    out += keep ? ch : blankSpan(ch);
     i += 1;
   }
   return out;
 }
 
-/** A `#` that begins a word, to end of line. Run after quote-stripping on the syntax pass. */
+/**
+ * A `#` that begins a word, to end of line. Only for the one needle family that reads
+ * quoted text: everything else gets its comments removed by the lexer, which knows when a
+ * `#` is inside a string and this does not.
+ */
 const stripComments = (s: string) => s.replace(/(^|[ \t])#[^\n]*/gm, "$1");
 
 /**
- * Patterns read off the script with its strings still intact, because that is where they
- * hide: `"$RANDOM"` is still an expansion, and a `%Z` only ever appears inside a quoted
- * `date` format. Comments are stripped first (a `#` inside a string can end a line early,
- * which can hide a needle - a false negative, never a false positive).
+ * How much of the script one needle is allowed to see. Quoting decides this, and it decides
+ * it differently per needle, so a single "strings intact" or "strings out" pass is wrong
+ * either way: with strings intact, `printf '%s\n' 'literal $RANDOM'` - a perfectly
+ * deterministic quoting drill - is rejected; with strings out, `date '+%Z'` is missed,
+ * because a format string is *always* quoted.
+ *
+ * - `expansion` - what bash will substitute. Read everywhere bash expands, which is
+ *   everywhere except single quotes and a heredoc whose delimiter was quoted. Double
+ *   quotes are read: `"$RANDOM"` really does expand.
+ * - `reach` - what the script runs or opens. Same, plus *every* heredoc body: a body is
+ *   data on its way to stdout whatever its delimiter, so it can spell out `/etc/hosts`
+ *   without ever touching it.
+ * - `argument` - what some other program parses. Read with quotes intact, because that is
+ *   where these live by construction: `date '+%Z'`, `grep -oP 'x\K.*'`.
  */
-const SCRIPT_NEEDLES: readonly { re: RegExp; problem: string }[] = [
-  { re: /\bnohup\b/, problem: "runs nohup: a graded run may not outlive the process being timed" },
-  { re: /\bdisown\b/, problem: "runs disown: a graded run may not detach work from the process being timed" },
-  { re: /\$RANDOM\b/, problem: "reads $RANDOM: a drill's output must be the same on every run" },
-  { re: /\$SRANDOM\b/, problem: "reads $SRANDOM: a drill's output must be the same on every run" },
-  { re: /\$\$/, problem: "reads $$: a pid differs on every run" },
-  { re: /\$BASHPID\b/, problem: "reads $BASHPID: a pid differs on every run" },
-  { re: /\$SECONDS\b/, problem: "reads $SECONDS: elapsed time differs on every run" },
-  { re: /\$EPOCH(?:SECONDS|REALTIME)\b/, problem: "reads the clock: a drill's output must be the same on every run" },
+type NeedleFamily = "expansion" | "reach" | "argument";
+
+const SCRIPT_NEEDLES: readonly { re: RegExp; family: NeedleFamily; problem: string }[] = [
+  { re: /\bnohup\b/, family: "reach", problem: "runs nohup: a graded run may not outlive the process being timed" },
+  {
+    re: /\bdisown\b/,
+    family: "reach",
+    problem: "runs disown: a graded run may not detach work from the process being timed",
+  },
+  { re: /\$RANDOM\b/, family: "expansion", problem: "reads $RANDOM: a drill's output must be the same on every run" },
+  { re: /\$SRANDOM\b/, family: "expansion", problem: "reads $SRANDOM: a drill's output must be the same on every run" },
+  { re: /\$\$/, family: "expansion", problem: "reads $$: a pid differs on every run" },
+  { re: /\$BASHPID\b/, family: "expansion", problem: "reads $BASHPID: a pid differs on every run" },
+  { re: /\$SECONDS\b/, family: "expansion", problem: "reads $SECONDS: elapsed time differs on every run" },
+  {
+    re: /\$EPOCH(?:SECONDS|REALTIME)\b/,
+    family: "expansion",
+    problem: "reads the clock: a drill's output must be the same on every run",
+  },
   {
     re: /%Z/,
+    family: "argument",
     problem: "formats %Z: msys `date` prints GMT where GNU coreutils prints UTC for the same TZ=UTC",
   },
   {
     re: /\$\{?(?:HOME|USER|LOGNAME|UID|EUID|PWD|OLDPWD|HOSTNAME)\b/,
+    family: "expansion",
     problem: "reads an identity variable: its value is the host's, and the graded run pins only $HOME",
   },
   {
     re: /(?:^|[\s;|&(])~(?:\/|\s|$)/m,
+    family: "reach",
     problem: "uses ~: the case directory is already the working directory, and ~ prints a host-shaped path",
   },
-  { re: /\b(?:export\s+)?PATH\s*=/, problem: "assigns PATH: SHELL_ENV pins it, and a bogus one fakes a broken toolchain" },
+  {
+    re: /\b(?:export\s+)?PATH\s*=/,
+    family: "reach",
+    problem: "assigns PATH: SHELL_ENV pins it, and a bogus one fakes a broken toolchain",
+  },
   {
     re: /(?:^|[\s"'=(<>|;&])\/(?:etc|tmp|usr|var|proc|sys|home|opt|root|bin|sbin|mnt|media|Users)\//,
+    family: "reach",
     problem: "names an absolute path: a case's files are staged relative to its own directory",
   },
   {
     re: /(?:^|[\s"'=(<>|;&])\/dev\/(?!(?:null|stdin|stdout|stderr|zero|full)\b)/,
+    family: "reach",
     problem: "names a device outside the portable set (/dev/null, /dev/std*, /dev/zero, /dev/full)",
   },
-  { re: /\b[A-Za-z]:[\\/]/, problem: "names a drive-letter path: it exists on one CI leg only" },
-  { re: /\bgrep\b[^\n]*\s-[A-Za-z]*P\b/, problem: "uses grep -P: it exits 2 under LC_ALL=C on the msys toolchain" },
-  { re: /\\K/, problem: "uses \\K, which is PCRE-only: grep -P is unavailable on the msys toolchain" },
+  { re: /\b[A-Za-z]:[\\/]/, family: "reach", problem: "names a drive-letter path: it exists on one CI leg only" },
+  {
+    re: /\bgrep\b[^\n]*\s-[A-Za-z]*P\b/,
+    family: "argument",
+    problem: "uses grep -P: it exits 2 under LC_ALL=C on the msys toolchain",
+  },
+  { re: /\\K/, family: "argument", problem: "uses \\K, which is PCRE-only: grep -P is unavailable on the msys toolchain" },
 ];
 
 /** One command-position token, with the rest of its simple command and where it sits. */
@@ -526,8 +620,9 @@ interface ShellCommand {
  * (`$tool file`) is unresolvable and skipped; anything inside `$(( ))`, a heredoc body or
  * a *single*-quoted string is blanked, so an `awk 'BEGIN { "date" | getline x }'` hides
  * its payload inside another language's syntax; a backtick substitution reads as a
- * separator rather than as nesting; and `find -exec`/`xargs` are followed one token deep
- * only. The real enforcement is execution.
+ * separator rather than as nesting; `find -exec`/`xargs` are followed one token deep only;
+ * and an unparenthesised `a << b` shift outside `$(( ))` reads as a heredoc opener and
+ * blanks until a line spelling `b`. The real enforcement is execution.
  */
 function extractCommands(stripped: string): ShellCommand[] {
   const functionNames = new Set<string>();
@@ -597,18 +692,22 @@ function simpleCommands(segment: string): { name: string; args: string }[] {
  * Everything wrong with one shipped shell script, as messages an author can act on.
  * Empty means the script stays inside the pinned toolchain and the determinism laws.
  */
-export function shellScriptProblems(script: string): string[] {
+function shellScriptProblems(script: string): string[] {
   const text = script.replace(/\r\n/g, "\n");
   const problems: string[] = [];
 
-  // Pass A: strings intact - "$RANDOM" is an expansion and a `date` format lives in quotes.
-  const uncommented = stripComments(text);
+  // Pass A: needles, each read over exactly as much of the script as its family may see.
+  const scanned: Record<NeedleFamily, string> = {
+    expansion: stripShellLiterals(text, { quotes: "single", heredocs: "quoted-delimiter" }),
+    reach: stripShellLiterals(text, { quotes: "single", heredocs: "all" }),
+    argument: stripComments(text),
+  };
   for (const needle of SCRIPT_NEEDLES) {
-    if (needle.re.test(uncommented)) problems.push(needle.problem);
+    if (needle.re.test(scanned[needle.family])) problems.push(needle.problem);
   }
 
-  // Pass B: syntax only - what is left after arithmetic, heredocs, strings and comments go.
-  const stripped = stripComments(stripQuoted(stripHeredocs(stripArithmetic(text))));
+  // Pass B: syntax only - arithmetic out first, so a bitwise `&` is not read as an operator.
+  const stripped = stripShellLiterals(stripArithmetic(text), { quotes: "both", heredocs: "all" });
   // Every surviving lone `&` is a background operator: `&&`, `&>`, `2>&1` and `|&` are
   // excluded by shape, and a sed replacement's `&` went with the quotes.
   if (/(?<![&>|<])&(?![&>])/.test(stripped)) {
@@ -669,7 +768,7 @@ function shellScriptFields(ex: ShellWriteExercise, reference?: ShellReference): 
 }
 
 /** Keys that cannot coexist as files in one directory, whichever order they are staged in. */
-export function stagedKeyConflicts(files: Record<string, string> | undefined): string[] {
+function stagedKeyConflicts(files: Record<string, string> | undefined): string[] {
   const keys = Object.keys(files ?? {});
   const conflicts: string[] = [];
   for (const [i, a] of keys.entries()) {
@@ -694,7 +793,7 @@ export function stagedKeyConflicts(files: Record<string, string> | undefined): s
  * treatment of `-n` and backslashes varies by shell - a line of expected output starting
  * with `-e` would silently become a flag.
  */
-export function echoCheese(c: ShellCase): string {
+function echoCheese(c: ShellCase): string {
   const quote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
   const status = c.expectedExitCode ?? 0;
   const text = normalizeOutput(c.expectedStdout);
@@ -780,7 +879,7 @@ describe("bank integrity - shell content", () => {
 });
 
 /** Grade one script exactly the way a submission is graded, in a directory of its own. */
-async function gradeShellSource(ex: ShellWriteExercise, script: string): Promise<GradeResult> {
+export async function gradeShellSource(ex: ShellWriteExercise, script: string): Promise<GradeResult> {
   const dir = scratch();
   writeFileSync(join(dir, solutionFileName(ex)), script, "utf8");
   return grade(ex, dir);
@@ -901,6 +1000,41 @@ describe("shell gates - proof they fire", () => {
     expect(shellScriptProblems(busy)).toEqual([]);
   });
 
+  it("reads quoting the way bash does, so inert text is not a defect", () => {
+    // Single quotes and a quoted heredoc delimiter make a region literal. Rejecting these
+    // would block the quoting drills that are shell's classic syntax-recall topic, and a
+    // heredoc emitting a fixture that merely *names* a path touches nothing.
+    expect(shellScriptProblems("printf '%s\\n' 'single quotes keep $RANDOM literal' > /dev/null\n")).toEqual([]);
+    expect(shellScriptProblems("printf '%s\\n' 'a ~ and a $HOME and PATH=/x, all literal'\n")).toEqual([]);
+    expect(shellScriptProblems("cat <<'EOF' > note.txt\nthe log used to live in /etc/hosts\nEOF\n")).toEqual([]);
+    expect(shellScriptProblems("# don't let an apostrophe in a comment swallow the file\njq . in.json\n").join())
+      .toContain("`jq`");
+
+    // ...but only where bash really is literal. Double quotes expand, an unquoted heredoc
+    // delimiter expands its body, and anything outside quotes is code.
+    expect(shellScriptProblems('printf "%s\\n" "$RANDOM"\n').join()).toContain("$RANDOM");
+    expect(shellScriptProblems("cat <<EOF\nthe seed was $RANDOM\nEOF\n").join()).toContain("$RANDOM");
+    expect(shellScriptProblems("wc -l ~/notes.txt\n").join()).toContain("~");
+    expect(shellScriptProblems("PATH=/nonexistent sort in.txt\n").join()).toContain("PATH");
+    // A format string is always quoted, so this family has to read quoted text.
+    expect(shellScriptProblems("date '+%Z'\n").join()).toContain("%Z");
+    expect(shellScriptProblems("grep -oP 'x\\K.*' in.txt\n").join()).toContain("\\K");
+  });
+
+  it("still finds a heredoc body when the opener line carries a comment", () => {
+    // The comment must not swallow the newline that starts the body, or the body's lines
+    // read as commands - `the` and `log` would come back as tools nobody has.
+    const script = "cat <<'EOF' > note.txt  # writes the fixture\nthe log lives here\nEOF\nwc -l note.txt\n";
+    expect(shellScriptProblems(script)).toEqual([]);
+  });
+
+  it("keeps scanning after a `<<` that is only text", () => {
+    // A heredoc opener inside a string is not an opener. Read as one, it blanks to end of
+    // file and silently disables the command scan for everything after it.
+    const script = 'printf \'%s\\n\' "a heredoc is written << EOF"\nwc -l < in.txt\njq -r .x in.txt\n';
+    expect(shellScriptProblems(script).join()).toContain("`jq`");
+  });
+
   it("rejects backgrounding, however it is spelled", () => {
     expect(shellScriptProblems("sleep 5 &\nwait\n").join()).toContain("backgrounds");
     expect(shellScriptProblems("sleep 5 & echo done\n").join()).toContain("backgrounds");
@@ -1010,10 +1144,10 @@ describe.skipIf(!hasBash())("shell gates - proof they fire, by execution", () =>
     expect(r.passed).toBeLessThan(fixture.shellCases.length);
   }, 60_000);
 
-  it("...and a drill the cheese can pass is one the gate rejects", async () => {
-    // Both cases expect the same output, so one hardcoded line answers the drill. The
-    // schema refuses this shape at parse time; the gate is the second net, and this is
-    // what it catches when an exercise reaches it another way.
+  it("...and the cheese reproduces case 1's exit status, not just its output", async () => {
+    // Two cases with identical stdout that differ only in exit status. If the cheese
+    // copied the output alone it would pass both and the gate would read as satisfied on
+    // a drill one hardcoded line answers; carrying the status is what keeps case 2 failing.
     const cheeseable: ShellWriteExercise = {
       ...fixture,
       id: "sr-sh-gate-2",
