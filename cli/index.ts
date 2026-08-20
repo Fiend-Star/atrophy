@@ -164,6 +164,18 @@ function allowlistNarrowing(allowed: Language[], hidden: number): string {
   );
 }
 
+/**
+ * What the config cost the baseline sweep on one axis, in the one wording both places that
+ * say it use - the axes the config alone withheld, and the ones it withheld beside a missing
+ * toolchain. Names both preferences, since either can be the one to change.
+ */
+function configSkip(pool: DrillPool, axis: Axis): string {
+  return (
+    `skipping ${axis}: no drills match your config` +
+    ` (languages: ${pool.allowed ? pool.allowed.join(", ") : "all"}; track: ${pool.track?.name ?? "all"})`
+  );
+}
+
 /** Narrowing is never silent: whatever shrank the pool says so before the drill starts. */
 function announcePool(pool: DrillPool, language: Language | undefined): void {
   if (pool.track) console.log(pc.dim(`track: ${pool.track.name} (${pool.bank.length} drills)`));
@@ -494,34 +506,35 @@ export async function baseline(store: Store, flags: DrillFlags): Promise<void> {
   const skipped = onThisHost.filter((a) => !axesWithExercises.includes(a));
   // ...and the axes the toolchains took outright: a fully equipped host would have swept
   // them, this one cannot. Disjoint from `skipped` by construction - such an axis is
-  // missing from `onThisHost`, which is the only place `skipped` draws from - so an axis
-  // both would have hidden is attributed to the toolchain, the same law the per-drill
-  // counters follow.
-  const toolchainSkipped = availableAxes(pool.unfiltered, language, allGenerators, EVERY_TOOLCHAIN).filter(
+  // missing from `onThisHost`, which is the only place `skipped` draws from - so it is the
+  // toolchain that gets the notice, the same law the per-drill counters follow.
+  const toolchainSkipped = availableAxes(pool.unfiltered, language, pool.generators, EVERY_TOOLCHAIN).filter(
     (a) => !onThisHost.includes(a),
   );
+  // Being disjoint as *lists* is not the same as the toolchain being the only cause: the two
+  // above are unconfigured, so an axis the config would also have withheld still lands in
+  // `toolchainSkipped` and would hear "install bash" alone - the empty-pool defect, transposed.
+  // This is the user's own pool on a fully equipped host, i.e. what installing the toolchain
+  // would actually get them; an axis missing from it has a config co-cause to name as well.
+  const ifEquipped = availableAxes(pool.bank, language, pool.generators, EVERY_TOOLCHAIN, pool.allowed);
   console.log(
     pc.bold("Baseline session") +
       ` - one unaided drill per axis (${axesWithExercises.length} available today).`,
   );
-  for (const axis of skipped) {
-    console.log(
-      pc.dim(
-        `skipping ${axis}: no drills match your config` +
-          ` (languages: ${pool.allowed ? pool.allowed.join(", ") : "all"}; track: ${pool.track?.name ?? "all"})`,
-      ),
-    );
-  }
+  for (const axis of skipped) console.log(pc.dim(configSkip(pool, axis)));
   for (const axis of axesWithExercises) {
     const ok = await drillOnce(store, { ...flags, axis }, { languageMix: false });
     if (!ok) break;
   }
-  // Last, next to the table that is about to show these axes untested: what a toolchain -
-  // not the config, which had its say above - kept off the sweep. The per-drill notice
-  // cannot reach them; it only fires inside a drill on an axis that survived.
+  // Last, next to the table that is about to show these axes untested: what a toolchain kept
+  // off the sweep. The per-drill notice cannot reach them; it only fires inside a drill on an
+  // axis that survived. Every cause is operative here too - so when the config would have
+  // withheld the axis anyway, it is named beside the toolchain rather than left for the user
+  // to discover after installing one.
   for (const axis of toolchainSkipped) {
     const hidden = hiddenByToolchain({ statics: pool.unfiltered, generators: allGenerators, axis, language });
     for (const notice of toolchainSkipNotices(hidden, axis)) console.log(pc.yellow(notice));
+    if (!ifEquipped.includes(axis)) console.log(pc.dim(configSkip(pool, axis)));
   }
   stats(store);
 }

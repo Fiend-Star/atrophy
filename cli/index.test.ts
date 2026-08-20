@@ -507,9 +507,13 @@ describe("baseline narrowing", () => {
     expect(logged).toContain(
       'note: axis "decomposition" skipped - 1 java drill(s) need a JDK (run `atrophy doctor`)',
     );
+    // toolchain-only: installing a JDK really is the whole fix, so the config stays out of it
+    expect(logged.some((l) => l.startsWith("skipping decomposition:"))).toBe(false);
   });
 
-  it("blames the toolchain, not the config, for an axis both would have hidden", async () => {
+  it("names the config beside the toolchain when the allowlist is a co-cause", async () => {
+    // Installing bash alone serves nothing here - the python-only allowlist still excludes
+    // shell - so naming bash alone would be the empty-pool defect on the baseline path.
     useBank(SHELL_WRITE);
     writeCfg({ languages: ["python"] });
     toolchain.bash = false;
@@ -520,7 +524,23 @@ describe("baseline narrowing", () => {
     expect(logged).toContain(
       'note: axis "decomposition" skipped - 1 shell drill(s) need bash (run `atrophy doctor`)',
     );
-    expect(logged.some((l) => l.startsWith("skipping decomposition:"))).toBe(false);
+    expect(logged).toContain("skipping decomposition: no drills match your config (languages: python; track: all)");
+  });
+
+  it("names the config beside the toolchain when a track is the co-cause", async () => {
+    useBank(JAVA_WRITE);
+    process.env.ATROPHY_PACKS = packDir; // useBank drops the pack; this shape needs it back
+    writeCfg({ track: "tpack" });
+    toolchain.jdk = false;
+    const mod = await importCli();
+
+    await mod.baseline(store, { show: true });
+
+    // the java write lives in base, which the focused track excludes: a JDK alone is not the fix
+    expect(logged).toContain(
+      'note: axis "decomposition" skipped - 1 java drill(s) need a JDK (run `atrophy doctor`)',
+    );
+    expect(logged).toContain("skipping decomposition: no drills match your config (languages: all; track: tpack)");
   });
 
   it("keeps the config attribution when the toolchain is there", async () => {
