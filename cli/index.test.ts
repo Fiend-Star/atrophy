@@ -86,6 +86,39 @@ async function importCli(): Promise<typeof import("./index.js")> {
   return await import("./index.js");
 }
 
+// Drills for the gating tests below. `decomposition` is the one axis with no generator
+// families, so a temp bank of these really is the whole pool a drill can draw from.
+const base = { axis: "decomposition", tier: 1, prompt: "p", softTimeLimitSeconds: 300 };
+const JAVA_WRITE = {
+  ...base,
+  id: "dec-java-900",
+  kind: "write",
+  language: "java",
+  title: "Java write",
+  functionName: "f",
+  starterCode: "public class Solution { int f() { return 1; } }",
+  tests: [{ args: [], expected: 1 }],
+};
+const JAVA_RECALL = { ...base, id: "dec-java-901", kind: "recall", language: "java", title: "Java recall", acceptedAnswers: ["a"] };
+const SHELL_WRITE = {
+  ...base,
+  id: "dec-sh-900",
+  kind: "write",
+  language: "shell",
+  title: "Shell write",
+  starterCode: "#!/usr/bin/env bash\n",
+  shellCases: [{ expectedStdout: "1" }, { expectedStdout: "2" }],
+};
+const SHELL_RECALL = { ...base, id: "dec-sh-901", kind: "recall", language: "shell", title: "Shell recall", acceptedAnswers: ["a"] };
+
+/** A bank of exactly these drills, replacing the built-in one and the test pack. */
+function useBank(...exercises: object[]): void {
+  ownBank = mkdtempSync(join(tmpdir(), "atrophy-bank-"));
+  exercises.forEach((e, i) => writeFileSync(join(ownBank!, `ex-${i}.json`), JSON.stringify(e), "utf8"));
+  process.env.ATROPHY_BANK = ownBank;
+  delete process.env.ATROPHY_PACKS;
+}
+
 beforeEach(() => {
   toolchain.jdk = true;
   toolchain.bash = true;
@@ -205,9 +238,14 @@ describe("language allowlist wiring", () => {
 
       expect(ok).toBe(false);
       const narrowing = output.findIndex((l) => l.startsWith("config limits languages to python - 1 drills"));
-      const empty = output.findIndex((l) => l.startsWith('no exercises in the bank for axis "decomposition"'));
+      // ...and the last word is not "the bank has nothing", because the bank has one
+      // and this config hid it - the line above is the whole explanation.
+      const empty = output.findIndex((l) =>
+        l.startsWith('no drills available for axis "decomposition" on this setup'),
+      );
       expect(narrowing).toBeGreaterThanOrEqual(0);
       expect(empty).toBeGreaterThan(narrowing);
+      expect(output.some((l) => l.startsWith("no exercises in the bank"))).toBe(false);
     } finally {
       delete process.env.ATROPHY_BANK;
       rmSync(bankDir, { recursive: true, force: true });
@@ -281,39 +319,6 @@ describe("track focus wiring", () => {
 });
 
 describe("toolchain narrowing", () => {
-  // decomposition is the one axis with no generator families, so a temp bank of two
-  // drills really is the whole pool a drill can draw from.
-  const base = { axis: "decomposition", tier: 1, prompt: "p", softTimeLimitSeconds: 300 };
-  const JAVA_WRITE = {
-    ...base,
-    id: "dec-java-900",
-    kind: "write",
-    language: "java",
-    title: "Java write",
-    functionName: "f",
-    starterCode: "public class Solution { int f() { return 1; } }",
-    tests: [{ args: [], expected: 1 }],
-  };
-  const JAVA_RECALL = { ...base, id: "dec-java-901", kind: "recall", language: "java", title: "Java recall", acceptedAnswers: ["a"] };
-  const SHELL_WRITE = {
-    ...base,
-    id: "dec-sh-900",
-    kind: "write",
-    language: "shell",
-    title: "Shell write",
-    starterCode: "#!/usr/bin/env bash\n",
-    shellCases: [{ expectedStdout: "1" }, { expectedStdout: "2" }],
-  };
-  const SHELL_RECALL = { ...base, id: "dec-sh-901", kind: "recall", language: "shell", title: "Shell recall", acceptedAnswers: ["a"] };
-
-  /** A bank of exactly these drills, replacing the built-in one and the test pack. */
-  function useBank(...exercises: object[]): void {
-    ownBank = mkdtempSync(join(tmpdir(), "atrophy-bank-"));
-    exercises.forEach((e, i) => writeFileSync(join(ownBank!, `ex-${i}.json`), JSON.stringify(e), "utf8"));
-    process.env.ATROPHY_BANK = ownBank;
-    delete process.env.ATROPHY_PACKS;
-  }
-
   it("an empty --lang shell pool names bash, never the JDK", async () => {
     useBank(JAVA_WRITE, SHELL_WRITE);
     toolchain.bash = false;
@@ -392,6 +397,77 @@ describe("toolchain narrowing", () => {
   });
 });
 
+/**
+ * An empty pool must name every cause that is *operative* - one the user could act on and
+ * get a drill out of, alone or together with the others named. Naming only one of two is
+ * how "install bash" gets printed to someone whose allowlist would still exclude shell.
+ */
+describe("empty-pool causes", () => {
+  it("names the allowlist as well as the toolchain when neither fix alone would serve", async () => {
+    useBank(SHELL_WRITE);
+    writeCfg({ languages: ["python"] });
+    toolchain.bash = false;
+    const mod = await importCli();
+
+    const ok = await mod.drillOnce(store, { axis: "decomposition", show: true });
+
+    expect(ok).toBe(false);
+    const said = output.join("\n");
+    // the config line is the one the anti-double-count law suppresses on the real
+    // toolchains (bash is billed for that drill) - and the one a bash install needs
+    expect(said).toContain(
+      "config limits languages to python - 1 drills hidden on this axis (atrophy setup to change)",
+    );
+    expect(said).toContain("ATROPHY_BASH");
+    expect(said).toContain('(1 shell drill(s) for "decomposition" need it');
+    expect(said).not.toContain("no exercises in the bank");
+  });
+
+  it("names the allowlist alone when no toolchain is missing", async () => {
+    useBank(SHELL_WRITE);
+    writeCfg({ languages: ["python"] });
+    const mod = await importCli();
+
+    const ok = await mod.drillOnce(store, { axis: "decomposition", show: true });
+
+    expect(ok).toBe(false);
+    const said = output.join("\n");
+    expect(said).toContain("config limits languages to python - 1 drills hidden on this axis");
+    // nothing to install: bash is here, and the drill is hidden by the user's own choice
+    expect(said).not.toContain("ATROPHY_BASH");
+    expect(said).not.toContain("no exercises in the bank");
+    // and the pre-drill note is not repeated now the empty-pool block can print it too
+    expect(output.filter((l) => l.startsWith("config limits languages")).length).toBe(1);
+  });
+
+  it("does not blame the allowlist for a pool it never touched", async () => {
+    useBank(SHELL_WRITE);
+    writeCfg({ languages: ["shell"] }); // the drill is allowed; only bash is missing
+    toolchain.bash = false;
+    const mod = await importCli();
+
+    const ok = await mod.drillOnce(store, { axis: "decomposition", show: true });
+
+    expect(ok).toBe(false);
+    const said = output.join("\n");
+    expect(said).toContain("ATROPHY_BASH");
+    expect(said).not.toContain("config limits languages");
+  });
+
+  it("still says the bank is bare when it genuinely is", async () => {
+    useBank({ ...JAVA_RECALL, id: "sr-java-900", axis: "syntax-recall" });
+    const mod = await importCli();
+
+    // nothing static on decomposition, and no generator family covers it
+    expect(await mod.drillOnce(store, { axis: "decomposition", show: true })).toBe(false);
+    expect(errors).toContain('no exercises in the bank for axis "decomposition" yet');
+
+    // ...and the same when a --lang is what has nothing behind it
+    expect(await mod.drillOnce(store, { axis: "decomposition", lang: "sql", show: true })).toBe(false);
+    expect(errors).toContain('no exercises in the bank for axis "decomposition" (sql) yet');
+  });
+});
+
 describe("baseline narrowing", () => {
   it("sweeps only surviving axes and names the ones config skipped", async () => {
     writeCfg({ track: "tpack" });
@@ -405,5 +481,65 @@ describe("baseline narrowing", () => {
     }
     expect(logged).toContain("skipping debugging: no drills match your config (languages: all; track: tpack)");
     expect(logged.filter((l) => l.startsWith("skipping ")).length).toBe(4);
+  });
+
+  it("names an axis a missing toolchain took off the sweep", async () => {
+    useBank(SHELL_WRITE);
+    toolchain.bash = false;
+    const mod = await importCli();
+
+    await mod.baseline(store, { show: true });
+
+    expect(logged).toContain(
+      'note: axis "decomposition" skipped - 1 shell drill(s) need bash (run `atrophy doctor`)',
+    );
+    // a toolchain gap is never a config gap: nothing here matched the config badly
+    expect(logged.some((l) => l.startsWith("skipping decomposition:"))).toBe(false);
+  });
+
+  it("says the same for a JDK, in that toolchain's own words", async () => {
+    useBank(JAVA_WRITE);
+    toolchain.jdk = false;
+    const mod = await importCli();
+
+    await mod.baseline(store, { show: true });
+
+    expect(logged).toContain(
+      'note: axis "decomposition" skipped - 1 java drill(s) need a JDK (run `atrophy doctor`)',
+    );
+  });
+
+  it("blames the toolchain, not the config, for an axis both would have hidden", async () => {
+    useBank(SHELL_WRITE);
+    writeCfg({ languages: ["python"] });
+    toolchain.bash = false;
+    const mod = await importCli();
+
+    await mod.baseline(store, { show: true });
+
+    expect(logged).toContain(
+      'note: axis "decomposition" skipped - 1 shell drill(s) need bash (run `atrophy doctor`)',
+    );
+    expect(logged.some((l) => l.startsWith("skipping decomposition:"))).toBe(false);
+  });
+
+  it("keeps the config attribution when the toolchain is there", async () => {
+    useBank(SHELL_WRITE);
+    writeCfg({ languages: ["python"] });
+    const mod = await importCli();
+
+    await mod.baseline(store, { show: true });
+
+    expect(logged).toContain("skipping decomposition: no drills match your config (languages: python; track: all)");
+    expect(logged.some((l) => l.startsWith('note: axis "decomposition" skipped'))).toBe(false);
+  });
+
+  it("says nothing about toolchains when none are missing", async () => {
+    useBank(SHELL_WRITE);
+    const mod = await importCli();
+
+    await mod.baseline(store, { show: true });
+
+    expect(logged.some((l) => l.startsWith("note: axis "))).toBe(false);
   });
 });

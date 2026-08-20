@@ -207,12 +207,12 @@ export function checkBash(): CheckResult {
  */
 const TOOLCHAIN_LABELS: Record<
   keyof HiddenByToolchain,
-  { language: Language; missing: string; hint: () => string }
+  { language: Language; missing: string; needs: string; hint: () => string }
 > = {
   // The hints are thunks: resolving bash can spawn `git --exec-path`, and a host that
   // hid nothing should not pay for a message it will never print.
-  jdk: { language: "java", missing: "no JDK found", hint: () => missingJdkHint(javacCommand()) },
-  bash: { language: "shell", missing: "no bash found", hint: () => missingBashHint(bashCommand()) },
+  jdk: { language: "java", missing: "no JDK found", needs: "a JDK", hint: () => missingJdkHint(javacCommand()) },
+  bash: { language: "shell", missing: "no bash found", needs: "bash", hint: () => missingBashHint(bashCommand()) },
 };
 
 /**
@@ -271,6 +271,28 @@ export function toolchainGaps(hidden: HiddenByToolchain, axis: Axis): ToolchainG
     });
   }
   return gaps;
+}
+
+/**
+ * What `baseline` says when a missing toolchain took a *whole axis* off the sweep. The
+ * per-drill notice above cannot cover this: it only ever fires inside a drill on an axis
+ * that survived, so without this line the axis is simply absent from "(N available today)"
+ * and the user is never told a toolchain is why.
+ *
+ * Language-agnostic like `toolchainGaps`, and for the same reason - the axis is gone
+ * entirely, so a config-shaped silence would be the lie. `hidden` is already filtered by
+ * the requested language upstream, so a `--lang java` sweep is still never sent after bash.
+ * One line per toolchain that hid something here, in attribution order.
+ */
+export function toolchainSkipNotices(hidden: HiddenByToolchain, axis: Axis): string[] {
+  const notices: string[] = [];
+  for (const tool of TOOLCHAINS) {
+    const n = hidden[tool];
+    if (n <= 0) continue;
+    const { language, needs } = TOOLCHAIN_LABELS[tool];
+    notices.push(`note: axis "${axis}" skipped - ${n} ${language} drill(s) need ${needs} (run \`atrophy doctor\`)`);
+  }
+  return notices;
 }
 
 /** SQLite's own version, from a real query - which also proves the native addon loaded. */

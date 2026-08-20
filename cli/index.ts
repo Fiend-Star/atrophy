@@ -13,6 +13,7 @@ import { configLanguages, configPath, configTrack, packDirs } from "./config.js"
 import { findTrack, resolveTracks, type Track } from "./tracks.js";
 import { detectAssistants } from "../engine/guard.js";
 import {
+  EVERY_TOOLCHAIN,
   availableAxes,
   hiddenByLanguages,
   hiddenByToolchain,
@@ -31,7 +32,7 @@ import {
   type RatingState,
 } from "../engine/scoring.js";
 import { Store, defaultDbPath } from "../store/db.js";
-import { hiddenToolchainNotice, runDoctor, toolchainGaps } from "./doctor.js";
+import { hiddenToolchainNotice, runDoctor, toolchainGaps, toolchainSkipNotices } from "./doctor.js";
 import { reportCommand } from "./report.js";
 import { setupAction, type SetupFlags } from "./setup.js";
 
@@ -152,6 +153,17 @@ function resolvePool(flags: DrillFlags): DrillPool {
   };
 }
 
+/**
+ * What the language allowlist costs on one axis, in the one wording both places that say
+ * it use - before a drill that survived, and inside the report for one that did not.
+ */
+function allowlistNarrowing(allowed: Language[], hidden: number): string {
+  return (
+    `config limits languages to ${allowed.join(", ")}` +
+    ` - ${hidden} drills hidden on this axis (atrophy setup to change)`
+  );
+}
+
 /** Narrowing is never silent: whatever shrank the pool says so before the drill starts. */
 function announcePool(pool: DrillPool, language: Language | undefined): void {
   if (pool.track) console.log(pc.dim(`track: ${pool.track.name} (${pool.bank.length} drills)`));
@@ -244,16 +256,21 @@ export async function drillOnce(
     }
     // The allowlist is the user's own choice, so it shrinks the pool quietly - but
     // never silently: say how much of this axis it costs before the drill starts.
-    if (pool.allowed) {
-      const hiddenLang = hiddenByLanguages(pick, pool.allowed);
-      if (hiddenLang > 0) {
-        console.log(
-          pc.dim(
-            `config limits languages to ${pool.allowed.join(", ")}` +
-              ` - ${hiddenLang} drills hidden on this axis (atrophy setup to change)`,
-          ),
-        );
-      }
+    //
+    // Two counts, because they answer two different questions. `hidden` runs on the real
+    // toolchains and is what this host actually lost to the allowlist - the honest number
+    // for the note below. `hiddenIfEquipped` asks a fully equipped host the same thing,
+    // and only it can tell the empty-pool report whether the allowlist is a cause at all
+    // (see there).
+    const allowlist = pool.allowed
+      ? {
+          languages: pool.allowed,
+          hidden: hiddenByLanguages(pick, pool.allowed),
+          hiddenIfEquipped: hiddenByLanguages({ ...pick, toolchains: EVERY_TOOLCHAIN }, pool.allowed),
+        }
+      : undefined;
+    if (allowlist && allowlist.hidden > 0) {
+      console.log(pc.dim(allowlistNarrowing(allowlist.languages, allowlist.hidden)));
     }
     // Selection hides the drills this host cannot grade: java content a JVM would have
     // to run with no JDK, shell scripts with no bash. For the user who asked for that
@@ -264,9 +281,28 @@ export async function drillOnce(
     const hidden = hiddenByToolchain(pick);
     ex = selectExercise(pick);
     if (!ex) {
+      // Every cause named here has to be *operative*: fixing it - alone, or together with
+      // the others named alongside it - would actually surface a drill. A toolchain gap
+      // qualifies because the drill it hides exists and matches the request. The allowlist
+      // qualifies on `hiddenIfEquipped`, not on the count above: the anti-double-count law
+      // bills a drill that the allowlist and a missing toolchain both exclude to the
+      // toolchain, which would leave "install bash" standing alone in front of a user whose
+      // config still excludes shell - the one actionable line, and the wrong one.
       const gaps = toolchainGaps(hidden, axis);
-      if (gaps.length > 0) {
-        for (const gap of gaps) console.error(pc.yellow(gap.hint) + pc.dim(`\n  ${gap.detail}`));
+      const allowlistCause = (allowlist?.hiddenIfEquipped ?? 0) > 0;
+      // Same wording, same order as the surviving-pool path: allowlist, then toolchains,
+      // then the conclusion. Skipped when the note above already said it.
+      if (allowlist && allowlist.hiddenIfEquipped > 0 && allowlist.hidden === 0) {
+        console.log(pc.dim(allowlistNarrowing(allowlist.languages, allowlist.hiddenIfEquipped)));
+      }
+      for (const gap of gaps) console.error(pc.yellow(gap.hint) + pc.dim(`\n  ${gap.detail}`));
+      if (allowlistCause || gaps.length > 0) {
+        // "no exercises in the bank" would contradict the lines just printed - the bank
+        // has them, this setup cannot serve them.
+        console.error(
+          pc.red(`no drills available for axis "${axis}"${flags.lang ? ` (${flags.lang})` : ""} on this setup`) +
+            pc.dim(" - the bank has them; see above for what hid them"),
+        );
         return false;
       }
       console.error(pc.red(`no exercises in the bank for axis "${axis}"${flags.lang ? ` (${flags.lang})` : ""} yet`));
@@ -454,8 +490,15 @@ export async function baseline(store: Store, flags: DrillFlags): Promise<void> {
   const axesWithExercises = availableAxes(pool.bank, language, pool.generators, undefined, pool.allowed);
   // Both sides run on this host's real toolchains, so an axis a missing JDK hid is
   // never blamed on the config (that one has its own notice inside the drill).
-  const skipped = availableAxes(pool.unfiltered, language, allGenerators).filter(
-    (a) => !axesWithExercises.includes(a),
+  const onThisHost = availableAxes(pool.unfiltered, language, allGenerators);
+  const skipped = onThisHost.filter((a) => !axesWithExercises.includes(a));
+  // ...and the axes the toolchains took outright: a fully equipped host would have swept
+  // them, this one cannot. Disjoint from `skipped` by construction - such an axis is
+  // missing from `onThisHost`, which is the only place `skipped` draws from - so an axis
+  // both would have hidden is attributed to the toolchain, the same law the per-drill
+  // counters follow.
+  const toolchainSkipped = availableAxes(pool.unfiltered, language, allGenerators, EVERY_TOOLCHAIN).filter(
+    (a) => !onThisHost.includes(a),
   );
   console.log(
     pc.bold("Baseline session") +
@@ -472,6 +515,13 @@ export async function baseline(store: Store, flags: DrillFlags): Promise<void> {
   for (const axis of axesWithExercises) {
     const ok = await drillOnce(store, { ...flags, axis }, { languageMix: false });
     if (!ok) break;
+  }
+  // Last, next to the table that is about to show these axes untested: what a toolchain -
+  // not the config, which had its say above - kept off the sweep. The per-drill notice
+  // cannot reach them; it only fires inside a drill on an axis that survived.
+  for (const axis of toolchainSkipped) {
+    const hidden = hiddenByToolchain({ statics: pool.unfiltered, generators: allGenerators, axis, language });
+    for (const notice of toolchainSkipNotices(hidden, axis)) console.log(pc.yellow(notice));
   }
   stats(store);
 }

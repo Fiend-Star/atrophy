@@ -99,8 +99,18 @@ function hostToolchains(): Toolchains {
   return { jdk: hasJdk(), bash: hasBash() };
 }
 
-/** A host with everything installed - the "what could ever be offered" arm below. */
-const EVERY_TOOLCHAIN: Toolchains = { jdk: true, bash: true };
+/**
+ * A host with everything installed - the "what could ever be offered" arm below.
+ *
+ * Exported because the CLI's *reporting* needs the same arm, and cannot honestly build it
+ * itself: `hiddenByLanguages` and `availableAxes` run on the real toolchains, which is the
+ * right answer to "what did this host lose" and the wrong one to "would that fix help".
+ * (A shell write excluded by both the allowlist and a missing bash is billed to bash, so
+ * the allowlist reads 0 and "install bash" becomes the only advice - for a drill installing
+ * bash would still not serve.) Frozen, and a literal here rather than in the CLI so a third
+ * toolchain reaches every arm through the same type error.
+ */
+export const EVERY_TOOLCHAIN: Readonly<Toolchains> = Object.freeze({ jdk: true, bash: true });
 
 /**
  * What selection needs to know about a candidate before it exists: an exercise carries

@@ -3,6 +3,7 @@ import type { ExerciseGenerator } from "../bank/generators/types.js";
 import type { Exercise, Language } from "../bank/schema.js";
 import { mulberry32 } from "./rng.js";
 import {
+  EVERY_TOOLCHAIN,
   availableAxes,
   familyOf,
   hiddenByLanguages,
@@ -808,5 +809,23 @@ describe("hiddenByLanguages", () => {
     const pool = { statics: [shellWriteEx("sr-sh-001"), pyWrite], axis: "syntax-recall" as const, toolchains: NO_BASH };
     expect(hiddenByLanguages(pool, ["shell"])).toBe(1);
     expect(hiddenByToolchain(pool)).toEqual({ jdk: 0, bash: 1 });
+  });
+
+  it("under EVERY_TOOLCHAIN it answers the other question instead", () => {
+    // Same pool, same allowlist, two different questions. On the real (bash-less)
+    // toolchains the shell write is billed to bash and this reads 0 - the right answer
+    // to "what did this host lose to the allowlist". A fully equipped host is asked the
+    // other one, "would clearing the allowlist ever put a drill back", and that is the
+    // one the CLI's empty-pool report needs before it tells anyone to install bash.
+    const pool = { statics: [shellWriteEx("sr-sh-001")], axis: "syntax-recall" as const, toolchains: NO_BASH };
+    expect(hiddenByLanguages(pool, ["python"])).toBe(0);
+    expect(hiddenByLanguages({ ...pool, toolchains: EVERY_TOOLCHAIN }, ["python"])).toBe(1);
+  });
+});
+
+describe("EVERY_TOOLCHAIN", () => {
+  it("is every toolchain, and immutable", () => {
+    expect(EVERY_TOOLCHAIN).toEqual(ALL);
+    expect(Object.isFrozen(EVERY_TOOLCHAIN)).toBe(true);
   });
 });

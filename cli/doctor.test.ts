@@ -18,6 +18,7 @@ import {
   javaCheckResult,
   runDoctor,
   toolchainGaps,
+  toolchainSkipNotices,
 } from "./doctor.js";
 
 describe("checkNode", () => {
@@ -299,6 +300,28 @@ describe("toolchainGaps", () => {
 
   it("is empty when nothing was hidden", () => {
     expect(toolchainGaps({ jdk: 0, bash: 0 }, "syntax-recall")).toEqual([]);
+  });
+});
+
+describe("toolchainSkipNotices", () => {
+  it("names the toolchain that took a whole axis off the baseline sweep", () => {
+    expect(toolchainSkipNotices({ jdk: 0, bash: 1 }, "decomposition")).toEqual([
+      'note: axis "decomposition" skipped - 1 shell drill(s) need bash (run `atrophy doctor`)',
+    ]);
+    expect(toolchainSkipNotices({ jdk: 3, bash: 0 }, "code-reading")).toEqual([
+      'note: axis "code-reading" skipped - 3 java drill(s) need a JDK (run `atrophy doctor`)',
+    ]);
+  });
+
+  it("names both when both toolchains hid drills on that axis", () => {
+    expect(toolchainSkipNotices({ jdk: 1, bash: 2 }, "debugging")).toEqual([
+      'note: axis "debugging" skipped - 1 java drill(s) need a JDK (run `atrophy doctor`)',
+      'note: axis "debugging" skipped - 2 shell drill(s) need bash (run `atrophy doctor`)',
+    ]);
+  });
+
+  it("says nothing when the toolchains hid nothing", () => {
+    expect(toolchainSkipNotices({ jdk: 0, bash: 0 }, "syntax-recall")).toEqual([]);
   });
 });
 
