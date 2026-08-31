@@ -488,6 +488,39 @@ describe.skipIf(!hasJdk())("grade - java testCode", () => {
     expect(Number.isFinite(r.passed)).toBe(true); // NaN would ride into exerciseScore and the rating
   }, 90_000);
 
+  it("bounds a huge thrown-exception message reached via the recommended catch idiom", async () => {
+    const dir = scratch();
+    // The exact idiom CLAUDE.md tells harness authors to use: a submitted solution's
+    // exception message is effectively attacker-controlled input through `"harness
+    // crashed: " + t`.
+    const hugeMessage: HarnessExercise = {
+      ...harnessEx,
+      id: "conc-java-909",
+      totalChecks: 1,
+      testCode: `public class Harness {
+    public static void main(String[] args) throws Exception {
+        Atrophy.plan(1);
+        try {
+            throw new RuntimeException("x".repeat(2000));
+        } catch (Throwable t) {
+            Atrophy.check("harness crashed: " + t, false);
+        } finally {
+            Atrophy.report();
+        }
+    }
+}`,
+    };
+    writeSolution(dir, hugeMessage, hugeMessage.starterCode);
+    const r = await grade(hugeMessage, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(0);
+    expect(r.total).toBe(1);
+    const failure = r.failures[0];
+    expect(failure?.error).toBeTruthy();
+    expect((failure?.error as string).length).toBeLessThan(600);
+    expect(failure?.error).toMatch(/\.\.\. \(\d+ more chars\)$/);
+  }, 90_000);
+
   it("scores a deadlocked solution 0 with named failures via the watchdog", async () => {
     const dir = scratch();
     const deadlockEx: HarnessExercise = { ...harnessEx, id: "conc-java-903", testTimeoutMs: 60_000 };
