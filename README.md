@@ -63,7 +63,7 @@ Not every skill is "write code against tests" - see the table below.
 | **Debugging** | Working-looking code has one planted bug - find and fix it | Hidden tests |
 | **Code reading** | Read a snippet, type exactly what it prints | Compared to the snippet's real output |
 | **API memory** | Fill in the blanked-out stdlib call, implement the API against a shipped harness, or answer a short recall question testing a general fact. Packs can add a multi-blank snippet scored one point per blank | Answer match, or harness checks |
-| **Decomposition** | Outline a design (rate limiter, folder sync…) in bullets - or build it: an algorithm against tests, a data structure against its own harness | Self-scored against a revealed rubric; the build drills by tests or harness checks |
+| **Decomposition** | Outline a design (rate limiter, folder sync…) in bullets, graded on the choice itself - or build one you're handed: an algorithm against tests, a data structure against its own harness, graded on the implementation, not the choice | Self-scored against a revealed rubric; the build drills by tests or harness checks |
 
 The built-in bank spans Python, JavaScript, Java and SQL across three tiers -
 a hand-written static bank plus **generator families that render endless fresh
