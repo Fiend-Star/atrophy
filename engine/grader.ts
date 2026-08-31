@@ -58,7 +58,7 @@ export function pythonCommand(): string {
 
 function pythonHarness(ex: TestedExercise): string {
   const tests = JSON.stringify(ex.tests);
-  return `import importlib.util, json, sys, traceback
+  return `import importlib.util, json, math, sys, traceback
 
 spec = importlib.util.spec_from_file_location("solution", "solution.py")
 mod = importlib.util.module_from_spec(spec)
@@ -74,8 +74,31 @@ except Exception:
     sys.exit(0)
 
 tests = json.loads(${JSON.stringify(tests)})
+
+# Mirrors engine/java/Harness.java's codec (see its "Number model" doc comment), which
+# in turn mirrors JSON.stringify: an integral finite float renders as its int form, and
+# NaN/Infinity render as null. This can only ever *widen* what compares equal - the JS
+# JSON.stringify round-trip that embeds \`tests\` above already collapses any originally-
+# float integral \`expected\`/\`args\` value to an int before Python ever sees it, so
+# normalize() only has real work to do on \`actual\`, the solution's own return value.
+# bool is never touched: isinstance(v, float) is False for bool (a python int subclass),
+# so True/False pass straight through the final \`return v\`.
+_INT_SAFE_MAX = 9007199254740992.0  # 2**53, the same bound Harness.java's writeDouble uses
+def normalize(v):
+    if isinstance(v, float):
+        if not math.isfinite(v):
+            return None
+        if v == int(v) and abs(v) <= _INT_SAFE_MAX:
+            return int(v)
+        return v
+    if isinstance(v, list):
+        return [normalize(x) for x in v]
+    if isinstance(v, dict):
+        return {k: normalize(x) for k, x in v.items()}
+    return v
+
 def canon(v):
-    return json.dumps(v, sort_keys=True, default=str)
+    return json.dumps(normalize(v), sort_keys=True, default=str)
 
 failures = []
 passed = 0

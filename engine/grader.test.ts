@@ -148,6 +148,79 @@ describe("parseMarker - honest message when the output cap ate the marker", () =
   });
 });
 
+describe("grade - python integral-float/int parity (mirrors JS/Java number semantics)", () => {
+  // `expected: 180` here stands in for an exercise authored as `180.0`: JS's own
+  // JSON.stringify already erases that distinction before Python ever sees the tests
+  // array, so the only way to reproduce "author meant a float" is via what the
+  // *solution* computes - a genuine python float with an integral value.
+  const percentEx: CodeExercise = {
+    ...pyEx,
+    id: "sr-py-910",
+    functionName: "percent",
+    starterCode: "def percent(x):\n    pass\n",
+    tests: [{ args: [1.8], expected: 180 }],
+  };
+
+  it("a solution returning an integral float scores 1.00, matching JS/Java parity", async () => {
+    const dir = scratch();
+    writeSolution(dir, percentEx, "def percent(x):\n    return x * 100.0\n");
+    const r = await grade(percentEx, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(1);
+    expect(r.total).toBe(1);
+  });
+
+  it("a solution returning a plain int still scores 1.00 too", async () => {
+    const dir = scratch();
+    writeSolution(dir, percentEx, "def percent(x):\n    return int(round(x * 100))\n");
+    const r = await grade(percentEx, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(1);
+  });
+
+  it("keeps non-integral float comparison exact - no fuzzy tolerance introduced", async () => {
+    const preciseEx: CodeExercise = {
+      ...pyEx,
+      id: "sr-py-911",
+      functionName: "half",
+      starterCode: "def half(x):\n    pass\n",
+      tests: [{ args: [1], expected: 0.5 }],
+    };
+    const dirOk = scratch();
+    writeSolution(dirOk, preciseEx, "def half(x):\n    return x / 2\n");
+    const ok = await grade(preciseEx, dirOk);
+    expect(ok.passed).toBe(1);
+
+    const dirWrong = scratch();
+    writeSolution(dirWrong, preciseEx, "def half(x):\n    return 0.51\n");
+    const wrong = await grade(preciseEx, dirWrong);
+    expect(wrong.passed).toBe(0);
+  });
+
+  it("renders NaN/Infinity as null, matching JSON.stringify (JS/Java) parity", async () => {
+    const nanEx: CodeExercise = {
+      ...pyEx,
+      id: "sr-py-912",
+      functionName: "bad",
+      starterCode: "def bad(x):\n    pass\n",
+      tests: [{ args: [0], expected: null }],
+    };
+    const dir = scratch();
+    writeSolution(dir, nanEx, "def bad(x):\n    return float('nan')\n");
+    const r = await grade(nanEx, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(1);
+  });
+
+  it("still distinguishes a genuinely wrong integer answer - the fix widens parity, not correctness", async () => {
+    const dir = scratch();
+    writeSolution(dir, percentEx, "def percent(x):\n    return x * 100.0 + 1\n");
+    const r = await grade(percentEx, dir);
+    expect(r.passed).toBe(0);
+    expect(r.failures[0]?.actual).toBe(181);
+  });
+});
+
 describe("grade - javascript", () => {
   it("passes a correct solution", async () => {
     const dir = scratch();
