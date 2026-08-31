@@ -16,10 +16,16 @@ import {
   gradeRecall,
   normalizeOutput,
   normalizeRecallAnswer,
+  parseMarker,
   solutionFileName,
   WHITESPACE_PARTIAL_CREDIT,
 } from "./grader.js";
 import { JAVA_COMPILE_TIMEOUT_MS, hasJdk } from "./javatool.js";
+import type { RunResult } from "./runner.js";
+
+function fakeRunResult(over: Partial<RunResult> = {}): RunResult {
+  return { stdout: "", stderr: "", exitCode: 0, timedOut: false, durationMs: 1, truncated: false, ...over };
+}
 
 const dirs: string[] = [];
 function scratch(): string {
@@ -98,6 +104,176 @@ describe("grade - python", () => {
     expect(r.passed).toBe(0);
     expect(r.harnessError).toMatch(/timed out/);
   }, 20_000);
+
+  it("gives an honest cap message, not the generic one, when a real run's output blows the cap before its marker", async () => {
+    const dir = scratch();
+    // Printed inside the graded function, so it lands on the same stdout the harness's
+    // own ATROPHY_RESULT line would use - three calls of this size comfortably exceed
+    // the 256KB cap before the harness gets to print its marker.
+    writeSolution(dir, pyEx, "def double(x):\n    print('x' * 300_000)\n    return x * 2\n");
+    const r = await grade(pyEx, dir);
+    expect(r.passed).toBe(0);
+    expect(r.harnessError).toMatch(/256KB cap/i);
+    expect(r.harnessError).not.toMatch(/please report this exercise/);
+  }, 20_000);
+
+  it("bounds a huge thrown-exception message so an earlier, genuinely-passing case is not zeroed", async () => {
+    const dir = scratch();
+    const mixedEx: CodeExercise = {
+      ...pyEx,
+      id: "sr-py-914",
+      functionName: "maybe_throws",
+      starterCode: "def maybe_throws(x):\n    pass\n",
+      tests: [
+        { args: [1], expected: 2 },
+        { args: [0], expected: 2 },
+      ],
+    };
+    writeSolution(
+      dir,
+      mixedEx,
+      "def maybe_throws(x):\n    if x == 0:\n        raise ValueError('z' * 300000)\n    return x * 2\n",
+    );
+    const r = await grade(mixedEx, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.total).toBe(2);
+    expect(r.passed).toBe(1); // case 0 (x=1) really did pass
+    const failure = r.failures.find((f) => f.index === 1);
+    expect(failure).toBeDefined();
+    expect((failure?.error as string).length).toBeLessThanOrEqual(2000);
+  });
+});
+
+describe("parseMarker - honest message when the output cap ate the marker", () => {
+  it("blames the cap, not the exercise, when no marker line survived a truncated run", () => {
+    const r = parseMarker(fakeRunResult({ stdout: "garbage before the cap hit", truncated: true }), 3, 15_000);
+    expect(r.harnessError).toMatch(/256KB cap/i);
+    expect(r.harnessError).not.toMatch(/please report this exercise/);
+  });
+
+  it("blames the cap, not the exercise, when a truncated run leaves an unparseable marker line", () => {
+    const r = parseMarker(fakeRunResult({ stdout: "ATROPHY_RESULT {oops", truncated: true }), 3, 15_000);
+    expect(r.harnessError).toMatch(/256KB cap/i);
+    expect(r.harnessError).not.toMatch(/please report this exercise/);
+  });
+
+  it("blames the cap, not the exercise, when a truncated run's marker parses but is not an object", () => {
+    const r = parseMarker(fakeRunResult({ stdout: "ATROPHY_RESULT null", truncated: true }), 3, 15_000);
+    expect(r.harnessError).toMatch(/256KB cap/i);
+  });
+
+  it("keeps the generic message when the run was not truncated - a real exercise bug still reads as one", () => {
+    const r = parseMarker(fakeRunResult({ stdout: "ATROPHY_RESULT {oops", truncated: false }), 3, 15_000);
+    expect(r.harnessError).toMatch(/unparseable ATROPHY_RESULT/);
+    expect(r.harnessError).not.toMatch(/256KB cap/i);
+  });
+
+  it("keeps the exit-code fallback message when nothing was truncated and no marker printed at all", () => {
+    const r = parseMarker(fakeRunResult({ stdout: "", stderr: "", exitCode: 1, truncated: false }), 3, 15_000);
+    expect(r.harnessError).toMatch(/harness produced no result \(exit 1\)/);
+  });
+});
+
+describe("grade - python integral-float/int parity (mirrors JS/Java number semantics)", () => {
+  // `expected: 180` here stands in for an exercise authored as `180.0`: JS's own
+  // JSON.stringify already erases that distinction before Python ever sees the tests
+  // array, so the only way to reproduce "author meant a float" is via what the
+  // *solution* computes - a genuine python float with an integral value.
+  const percentEx: CodeExercise = {
+    ...pyEx,
+    id: "sr-py-910",
+    functionName: "percent",
+    starterCode: "def percent(x):\n    pass\n",
+    tests: [{ args: [1.8], expected: 180 }],
+  };
+
+  it("a solution returning an integral float scores 1.00, matching JS/Java parity", async () => {
+    const dir = scratch();
+    writeSolution(dir, percentEx, "def percent(x):\n    return x * 100.0\n");
+    const r = await grade(percentEx, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(1);
+    expect(r.total).toBe(1);
+  });
+
+  it("a solution returning a plain int still scores 1.00 too", async () => {
+    const dir = scratch();
+    writeSolution(dir, percentEx, "def percent(x):\n    return int(round(x * 100))\n");
+    const r = await grade(percentEx, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(1);
+  });
+
+  it("keeps non-integral float comparison exact - no fuzzy tolerance introduced", async () => {
+    const preciseEx: CodeExercise = {
+      ...pyEx,
+      id: "sr-py-911",
+      functionName: "half",
+      starterCode: "def half(x):\n    pass\n",
+      tests: [{ args: [1], expected: 0.5 }],
+    };
+    const dirOk = scratch();
+    writeSolution(dirOk, preciseEx, "def half(x):\n    return x / 2\n");
+    const ok = await grade(preciseEx, dirOk);
+    expect(ok.passed).toBe(1);
+
+    const dirWrong = scratch();
+    writeSolution(dirWrong, preciseEx, "def half(x):\n    return 0.51\n");
+    const wrong = await grade(preciseEx, dirWrong);
+    expect(wrong.passed).toBe(0);
+  });
+
+  it("renders NaN/Infinity as null, matching JSON.stringify (JS/Java) parity", async () => {
+    const nanEx: CodeExercise = {
+      ...pyEx,
+      id: "sr-py-912",
+      functionName: "bad",
+      starterCode: "def bad(x):\n    pass\n",
+      tests: [{ args: [0], expected: null }],
+    };
+    const dir = scratch();
+    writeSolution(dir, nanEx, "def bad(x):\n    return float('nan')\n");
+    const r = await grade(nanEx, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(1);
+  });
+
+  it("still distinguishes a genuinely wrong integer answer - the fix widens parity, not correctness", async () => {
+    const dir = scratch();
+    writeSolution(dir, percentEx, "def percent(x):\n    return x * 100.0 + 1\n");
+    const r = await grade(percentEx, dir);
+    expect(r.passed).toBe(0);
+    expect(r.failures[0]?.actual).toBe(181);
+  });
+
+  it("keeps the whole result parseable when a *failing* case's actual is NaN/Infinity, and honestly scores the cases that did pass", async () => {
+    // Before the final-dumps sanitization fix, a raw NaN/Infinity leaking into `actual`
+    // here made json.dumps emit an invalid bareword token, which made the *entire*
+    // ATROPHY_RESULT line unparseable - zeroing a case (index 0) that actually passed.
+    const dir = scratch();
+    const mixedEx: CodeExercise = {
+      ...pyEx,
+      id: "sr-py-913",
+      functionName: "maybe_bad",
+      starterCode: "def maybe_bad(x):\n    pass\n",
+      tests: [
+        { args: [1], expected: 2 },
+        { args: [0], expected: 99 },
+      ],
+    };
+    writeSolution(
+      dir,
+      mixedEx,
+      "def maybe_bad(x):\n    if x == 0:\n        return float('inf')\n    return x * 2\n",
+    );
+    const r = await grade(mixedEx, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.total).toBe(2);
+    expect(r.passed).toBe(1); // case 0 (x=1) really did pass
+    const failure = r.failures.find((f) => f.index === 1);
+    expect(failure).toBeDefined();
+    expect(failure?.actual).toBeNull(); // sanitized the same way canon() renders it
+  });
 });
 
 describe("grade - javascript", () => {
@@ -129,6 +305,32 @@ describe("grade - javascript", () => {
     writeSolution(dir, ex, "function make() { return { b: 2, a: 1 }; }\nmodule.exports = { make };\n");
     const r = await grade(ex, dir);
     expect(r.passed).toBe(1);
+  });
+
+  it("bounds a huge thrown-exception message so an earlier, genuinely-passing case is not zeroed", async () => {
+    const dir = scratch();
+    const mixedEx: CodeExercise = {
+      ...jsEx,
+      id: "sr-js-903",
+      functionName: "maybeThrows",
+      starterCode: "function maybeThrows(x) {}\nmodule.exports = { maybeThrows };\n",
+      tests: [
+        { args: [1], expected: 2 },
+        { args: [0], expected: 2 },
+      ],
+    };
+    writeSolution(
+      dir,
+      mixedEx,
+      "function maybeThrows(x) { if (x === 0) throw new Error('z'.repeat(300000)); return x * 2; }\nmodule.exports = { maybeThrows };\n",
+    );
+    const r = await grade(mixedEx, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.total).toBe(2);
+    expect(r.passed).toBe(1); // case 0 (x=1) really did pass
+    const failure = r.failures.find((f) => f.index === 1);
+    expect(failure).toBeDefined();
+    expect((failure?.error as string).length).toBeLessThanOrEqual(2000);
   });
 });
 
@@ -227,6 +429,25 @@ describe.skipIf(!hasJdk())("grade - java", () => {
     expect(r.harnessError).toMatch(/timed out/);
     // The budget must cover compile (its own timeout) plus the timed-out run.
   }, JAVA_COMPILE_TIMEOUT_MS + 60_000);
+
+  it("bounds a huge thrown-exception message on the write/fix path (Harness.java's describeThrowable)", async () => {
+    const dir = scratch();
+    // The exception message is effectively attacker-controlled: it is exactly what a
+    // submitted solution chose to throw, embedded via t.toString() with no limit.
+    writeSolution(
+      dir,
+      javaEx,
+      'public class Solution {\n    static int twice(int x) { throw new RuntimeException("x".repeat(5000)); }\n}\n',
+    );
+    const r = await grade(javaEx, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(0);
+    expect(r.total).toBe(3);
+    const failure = r.failures[0];
+    expect(failure?.error).toBeTruthy();
+    expect((failure?.error as string).length).toBeLessThan(2200);
+    expect(failure?.error).toMatch(/\.\.\. \(\d+ more chars\)$/);
+  }, 60_000);
 });
 
 describe.skipIf(!hasJdk())("grade - java type matrix", () => {
@@ -274,6 +495,20 @@ describe.skipIf(!hasJdk())("grade - java type matrix", () => {
       [{ args: ["z"], expected: { a: 2, z: 1 } }],
     );
     expect(r.passed).toBe(1);
+  }, 60_000);
+
+  it("bounds a large expected/actual payload in a failure message so one wrong answer cannot blow the output cap alone", async () => {
+    const r = await gradeWith(
+      "import java.util.List;\nimport java.util.ArrayList;\npublic class Solution { static List<Integer> probe(int n) { return new ArrayList<>(); } }",
+      [{ args: [1000], expected: Array.from({ length: 1000 }, (_, i) => i) }],
+    );
+    expect(r.passed).toBe(0);
+    const failure = r.failures[0];
+    // "actual" (the wrong, empty list) is small and stays structured; "expected" (1000
+    // entries) blows the 1KB per-value budget and is elided to a string with a tail.
+    expect(failure?.actual).toEqual([]);
+    expect(typeof failure?.expected).toBe("string");
+    expect(failure?.expected as string).toMatch(/\.\.\. \(\d+ more chars\)$/);
   }, 60_000);
 
   it("accepts char params as 1-char strings; names overload ambiguity", async () => {
@@ -424,6 +659,39 @@ describe.skipIf(!hasJdk())("grade - java testCode", () => {
     expect(r.harnessError).toBeUndefined();
     expect(r.passed).toBe(0);
     expect(Number.isFinite(r.passed)).toBe(true); // NaN would ride into exerciseScore and the rating
+  }, 90_000);
+
+  it("bounds a huge thrown-exception message reached via the recommended catch idiom", async () => {
+    const dir = scratch();
+    // The exact idiom CLAUDE.md tells harness authors to use: a submitted solution's
+    // exception message is effectively attacker-controlled input through `"harness
+    // crashed: " + t`.
+    const hugeMessage: HarnessExercise = {
+      ...harnessEx,
+      id: "conc-java-909",
+      totalChecks: 1,
+      testCode: `public class Harness {
+    public static void main(String[] args) throws Exception {
+        Atrophy.plan(1);
+        try {
+            throw new RuntimeException("x".repeat(2000));
+        } catch (Throwable t) {
+            Atrophy.check("harness crashed: " + t, false);
+        } finally {
+            Atrophy.report();
+        }
+    }
+}`,
+    };
+    writeSolution(dir, hugeMessage, hugeMessage.starterCode);
+    const r = await grade(hugeMessage, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(0);
+    expect(r.total).toBe(1);
+    const failure = r.failures[0];
+    expect(failure?.error).toBeTruthy();
+    expect((failure?.error as string).length).toBeLessThan(600);
+    expect(failure?.error).toMatch(/\.\.\. \(\d+ more chars\)$/);
   }, 90_000);
 
   it("scores a deadlocked solution 0 with named failures via the watchdog", async () => {

@@ -55,8 +55,8 @@ public final class Harness {
             Object expected = test.get("expected");
             Map<String, Object> failure = new TreeMap<>();
             failure.put("index", (long) i);
-            failure.put("args", testArgs);
-            failure.put("expected", expected);
+            failure.put("args", bounded(testArgs));
+            failure.put("expected", bounded(expected));
             try {
                 Method method = findMethod(solutionClass, functionName, testArgs.size());
                 Object target = Modifier.isStatic(method.getModifiers()) ? null : solutionClass.getDeclaredConstructor().newInstance();
@@ -71,7 +71,7 @@ public final class Harness {
                 if (Json.write(canonActual).equals(Json.write(canonExpected))) {
                     passed++;
                 } else {
-                    failure.put("actual", canonActual);
+                    failure.put("actual", bounded(canonActual));
                     failures.add(failure);
                 }
             } catch (InvocationTargetException e) {
@@ -298,6 +298,31 @@ public final class Harness {
         return v == null ? "null" : v.getClass().getSimpleName();
     }
 
+    /** A failure value's JSON form beyond this is elided - see {@link #bounded}. */
+    private static final int MAX_VALUE_CHARS = 1024;
+
+    /**
+     * Bound how much of one failure value (args, expected, or actual) reaches the
+     * ATROPHY_RESULT line. A "handles a big input" exercise can legitimately have a
+     * large collection as the right answer, and a wrong submission's diff against it
+     * can single-handedly approach runner.ts's 256KB output cap - which turns a real
+     * failure into "please report this exercise" (parseMarker's honest-cap branch
+     * exists for exactly that case). This bound is per-value, not per-marker-line, so
+     * the cap is still reachable on a run with enough failing cases (roughly 85+ of this
+     * shape) - it raises that threshold well past shipped drill sizes rather than
+     * removing it; parseMarker's honest message is the floor once a run does cross it.
+     * The codec itself (Json.write) is untouched; this only bounds what gets displayed.
+     */
+    private static Object bounded(Object v) {
+        String json = Json.write(v);
+        if (json.length() <= MAX_VALUE_CHARS) return v;
+        int more = json.length() - MAX_VALUE_CHARS;
+        return json.substring(0, MAX_VALUE_CHARS) + "... (" + more + " more chars)";
+    }
+
+    /** An error string beyond this is elided - see the return of {@link #describeThrowable}. */
+    private static final int MAX_ERROR_CHARS = 2000;
+
     /** The top user frames only: the reflective call plumbing under them is our noise, not theirs. */
     private static String describeThrowable(Throwable t) {
         StringBuilder sb = new StringBuilder(t.toString());
@@ -315,7 +340,13 @@ public final class Harness {
         if (shown == 0) {
             for (int i = 0; i < Math.min(2, trace.length); i++) sb.append("\n  at ").append(trace[i]);
         }
-        return sb.toString();
+        // t.toString() (the exception's class + message) leads this string, and the message
+        // is exactly what a submitted solution chose to throw - effectively attacker-
+        // controlled, with no length limit of its own. One huge throw could otherwise
+        // approach runner.ts's 256KB output cap by itself, on every failing test case.
+        String result = sb.toString();
+        if (result.length() <= MAX_ERROR_CHARS) return result;
+        return result.substring(0, MAX_ERROR_CHARS) + "... (" + (result.length() - MAX_ERROR_CHARS) + " more chars)";
     }
 
     @SuppressWarnings("unchecked")

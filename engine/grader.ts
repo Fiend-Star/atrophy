@@ -26,8 +26,16 @@ import { run, type RunResult } from "./runner.js";
 
 export interface TestFailure {
   index: number;
-  /** Absent for exercise-supplied harnesses: an Atrophy check is a named assertion, not a call. */
-  args?: unknown[];
+  /**
+   * Absent for exercise-supplied harnesses: an Atrophy check is a named assertion, not a
+   * call. On the java write/fix path, Harness.java's `bounded()` (engine/java/Harness.java)
+   * may substitute the elided *JSON text* of an oversized value - as a plain string - for
+   * `args`/`expected`/`actual` alike, so `args` is typed to admit that rather than promise
+   * an array grading never actually guarantees. `expected`/`actual` were already `unknown`
+   * and need no change. The two readers of `.args` (engine/session.ts: the `undefined`
+   * check, and the `JSON.stringify` display) are both safe against either shape.
+   */
+  args?: unknown[] | string;
   expected?: unknown;
   actual?: unknown;
   error?: string;
@@ -58,7 +66,7 @@ export function pythonCommand(): string {
 
 function pythonHarness(ex: TestedExercise): string {
   const tests = JSON.stringify(ex.tests);
-  return `import importlib.util, json, sys, traceback
+  return `import importlib.util, json, math, sys, traceback
 
 spec = importlib.util.spec_from_file_location("solution", "solution.py")
 mod = importlib.util.module_from_spec(spec)
@@ -74,8 +82,31 @@ except Exception:
     sys.exit(0)
 
 tests = json.loads(${JSON.stringify(tests)})
+
+# Mirrors engine/java/Harness.java's codec (see its "Number model" doc comment), which
+# in turn mirrors JSON.stringify: an integral finite float renders as its int form, and
+# NaN/Infinity render as null. This can only ever *widen* what compares equal - the JS
+# JSON.stringify round-trip that embeds \`tests\` above already collapses any originally-
+# float integral \`expected\`/\`args\` value to an int before Python ever sees it, so
+# normalize() only has real work to do on \`actual\`, the solution's own return value.
+# bool is never touched: isinstance(v, float) is False for bool (a python int subclass),
+# so True/False pass straight through the final \`return v\`.
+_INT_SAFE_MAX = 9007199254740992.0  # 2**53, the same bound Harness.java's writeDouble uses
+def normalize(v):
+    if isinstance(v, float):
+        if not math.isfinite(v):
+            return None
+        if v == int(v) and abs(v) <= _INT_SAFE_MAX:
+            return int(v)
+        return v
+    if isinstance(v, list):
+        return [normalize(x) for x in v]
+    if isinstance(v, dict):
+        return {k: normalize(x) for k, x in v.items()}
+    return v
+
 def canon(v):
-    return json.dumps(v, sort_keys=True, default=str)
+    return json.dumps(normalize(v), sort_keys=True, default=str)
 
 failures = []
 passed = 0
@@ -89,11 +120,21 @@ for i, t in enumerate(tests):
             failures.append({"index": i, "args": t["args"],
                              "expected": t["expected"], "actual": actual})
     except Exception:
+        # limit=2 bounds the traceback's *frames*, not its characters - the exception's own
+        # message (e.g. from a submitted solution's own raise) is effectively attacker-
+        # controlled and unbounded on its own. [:2000] mirrors the budget describeThrowable
+        # uses in Harness.java, so a single huge throw cannot approach the output cap.
         failures.append({"index": i, "args": t["args"], "expected": t["expected"],
-                         "error": traceback.format_exc(limit=2)})
+                         "error": traceback.format_exc(limit=2)[:2000]})
 
-print("ATROPHY_RESULT " + json.dumps({"passed": passed, "total": len(tests),
-                                      "failures": failures}))
+result = {"passed": passed, "total": len(tests), "failures": failures}
+# The same normalize() used for comparison above - not a separate pass, so the two
+# sanitization sites cannot drift apart. Without this, a raw NaN/Infinity anywhere in a
+# failure's "actual" (json.dumps allows it by default, emitting the bareword tokens
+# NaN/Infinity/-Infinity, which are not valid JSON) makes this whole line unparseable on
+# the TS side - zeroing every case, including the ones that genuinely passed, instead of
+# scoring the NaN/Infinity case as the one failure it actually is.
+print("ATROPHY_RESULT " + json.dumps(normalize(result)))
 `;
 }
 
@@ -133,7 +174,11 @@ tests.forEach((t, i) => {
     if (canon(actual) === canon(t.expected)) passed += 1;
     else failures.push({ index: i, args: t.args, expected: t.expected, actual });
   } catch (err) {
-    failures.push({ index: i, args: t.args, expected: t.expected, error: String(err && err.stack || err).split("\\n").slice(0, 3).join("\\n") });
+    // .slice(0, 3) bounds the *lines* kept, not their length - the error's own message
+    // (e.g. from a submitted solution's own throw) is effectively attacker-controlled and
+    // unbounded on its own. The trailing .slice(0, 2000) mirrors describeThrowable's budget
+    // in Harness.java, so a single huge throw cannot approach the output cap.
+    failures.push({ index: i, args: t.args, expected: t.expected, error: String(err && err.stack || err).split("\\n").slice(0, 3).join("\\n").slice(0, 2000) });
   }
 });
 emit({ passed, total, failures });
@@ -279,11 +324,28 @@ async function gradeSql(ex: SqlWriteExercise, dir: string): Promise<GradeResult>
 }
 
 /**
+ * A missing or unparseable marker line usually means a broken exercise - but if the
+ * run's stdout hit runner.ts's output cap (RUNNER_OUTPUT_CAP below, defined once and
+ * referenced here even though it appears later in the file - both are module-level
+ * consts, and this function only runs after the whole module has finished loading),
+ * the marker (or whatever preceded it) may simply have been cut off. That is not
+ * evidence the exercise is wrong, so it gets an honest message instead of the generic
+ * one, which would otherwise send a user or a content author chasing a bug that is
+ * really just a big failure diff.
+ */
+function cappedHarnessError(): string {
+  // "reached", not "exceeded": `truncated` is true once stdout.length >= the cap, which
+  // includes the exact-boundary case where nothing was actually dropped (F2) - "exceeded"
+  // would be a false claim there.
+  return `output reached the ${RUNNER_OUTPUT_CAP / 1024}KB cap before the result marker - the failure diff may be too large; not necessarily an exercise bug`;
+}
+
+/**
  * Turn a finished harness run into a GradeResult: the timeout wins, then the
  * last ATROPHY_RESULT line, then whatever the process said before dying.
  * Shared by every language path so they fail the same way.
  */
-function parseMarker(result: RunResult, total: number, timeoutMs: number): GradeResult {
+export function parseMarker(result: RunResult, total: number, timeoutMs: number): GradeResult {
   if (result.timedOut) {
     return {
       passed: 0,
@@ -298,6 +360,9 @@ function parseMarker(result: RunResult, total: number, timeoutMs: number): Grade
     .reverse()
     .find((l) => l.startsWith(RESULT_MARKER));
   if (!line) {
+    if (result.truncated) {
+      return { passed: 0, total, failures: [], harnessError: cappedHarnessError() };
+    }
     const detail = (result.stderr || result.stdout).trim().slice(0, 2000);
     return {
       passed: 0,
@@ -314,7 +379,9 @@ function parseMarker(result: RunResult, total: number, timeoutMs: number): Grade
     passed: 0,
     total,
     failures: [],
-    harnessError: "harness printed an unparseable ATROPHY_RESULT line - please report this exercise",
+    harnessError: result.truncated
+      ? cappedHarnessError()
+      : "harness printed an unparseable ATROPHY_RESULT line - please report this exercise",
   };
   let parsed: unknown;
   try {

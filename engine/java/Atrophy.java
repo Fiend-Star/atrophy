@@ -26,7 +26,24 @@ public final class Atrophy {
     public static synchronized void check(String name, boolean ok) {
         ran++;
         if (ok) passed++;
-        else failures.add(name);
+        else failures.add(bounded(name));
+    }
+
+    /** A failure name beyond this is elided - see {@link #bounded}. */
+    private static final int MAX_NAME_CHARS = 500;
+
+    /**
+     * Bound one failure name. This project's own authoring convention
+     * (`catch (Throwable t) { Atrophy.check("harness crashed: " + t, false); }`) makes
+     * `name` effectively attacker-controlled: it can carry the full message of whatever
+     * the submitted solution threw. A single call here can otherwise approach runner.ts's
+     * 256KB output cap on its own, which turns a real failure into an unparseable-marker
+     * error instead of a score - so it is bounded at the source, once, for every harness
+     * that uses the idiom.
+     */
+    private static String bounded(String name) {
+        if (name == null || name.length() <= MAX_NAME_CHARS) return name;
+        return name.substring(0, MAX_NAME_CHARS) + "... (" + (name.length() - MAX_NAME_CHARS) + " more chars)";
     }
 
     /**
