@@ -326,7 +326,10 @@ async function gradeSql(ex: SqlWriteExercise, dir: string): Promise<GradeResult>
  * really just a big failure diff.
  */
 function cappedHarnessError(): string {
-  return `output exceeded the ${RUNNER_OUTPUT_CAP / 1024}KB cap before the result marker - the failure diff may be too large; not necessarily an exercise bug`;
+  // "reached", not "exceeded": `truncated` is true once stdout.length >= the cap, which
+  // includes the exact-boundary case where nothing was actually dropped (F2) - "exceeded"
+  // would be a false claim there.
+  return `output reached the ${RUNNER_OUTPUT_CAP / 1024}KB cap before the result marker - the failure diff may be too large; not necessarily an exercise bug`;
 }
 
 /**
