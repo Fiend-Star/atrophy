@@ -1,11 +1,12 @@
 import { configDefaults, defineConfig } from "vitest/config";
 
-// Agent worktrees are created under .claude/worktrees/ inside the repo root;
-// without this exclude, vitest crawls their duplicated *.test.ts copies and
-// the main checkout's suite runs (and can fail on) sibling in-progress trees.
+// Agent worktrees are created under .claude/worktrees/ or .worktrees/ inside the
+// repo root; without these excludes, vitest crawls their duplicated *.test.ts
+// copies and the main checkout's suite runs (and can fail on) sibling
+// in-progress trees - observed as an exactly-doubled test count.
 export default defineConfig({
   test: {
-    exclude: [...configDefaults.exclude, "**/.claude/**"],
+    exclude: [...configDefaults.exclude, "**/.claude/**", "**/.worktrees/**"],
     /**
      * Vitest's own default is 5000 ms, which is too tight for this suite: most of it
      * spawns real python/node/java/bash subprocesses, and CI runs four legs in parallel.
