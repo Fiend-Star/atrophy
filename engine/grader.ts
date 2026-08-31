@@ -26,8 +26,16 @@ import { run, type RunResult } from "./runner.js";
 
 export interface TestFailure {
   index: number;
-  /** Absent for exercise-supplied harnesses: an Atrophy check is a named assertion, not a call. */
-  args?: unknown[];
+  /**
+   * Absent for exercise-supplied harnesses: an Atrophy check is a named assertion, not a
+   * call. On the java write/fix path, Harness.java's `bounded()` (engine/java/Harness.java)
+   * may substitute the elided *JSON text* of an oversized value - as a plain string - for
+   * `args`/`expected`/`actual` alike, so `args` is typed to admit that rather than promise
+   * an array grading never actually guarantees. `expected`/`actual` were already `unknown`
+   * and need no change. The two readers of `.args` (engine/session.ts: the `undefined`
+   * check, and the `JSON.stringify` display) are both safe against either shape.
+   */
+  args?: unknown[] | string;
   expected?: unknown;
   actual?: unknown;
   error?: string;
