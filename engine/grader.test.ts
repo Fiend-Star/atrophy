@@ -219,6 +219,35 @@ describe("grade - python integral-float/int parity (mirrors JS/Java number seman
     expect(r.passed).toBe(0);
     expect(r.failures[0]?.actual).toBe(181);
   });
+
+  it("keeps the whole result parseable when a *failing* case's actual is NaN/Infinity, and honestly scores the cases that did pass", async () => {
+    // Before the final-dumps sanitization fix, a raw NaN/Infinity leaking into `actual`
+    // here made json.dumps emit an invalid bareword token, which made the *entire*
+    // ATROPHY_RESULT line unparseable - zeroing a case (index 0) that actually passed.
+    const dir = scratch();
+    const mixedEx: CodeExercise = {
+      ...pyEx,
+      id: "sr-py-913",
+      functionName: "maybe_bad",
+      starterCode: "def maybe_bad(x):\n    pass\n",
+      tests: [
+        { args: [1], expected: 2 },
+        { args: [0], expected: 99 },
+      ],
+    };
+    writeSolution(
+      dir,
+      mixedEx,
+      "def maybe_bad(x):\n    if x == 0:\n        return float('inf')\n    return x * 2\n",
+    );
+    const r = await grade(mixedEx, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.total).toBe(2);
+    expect(r.passed).toBe(1); // case 0 (x=1) really did pass
+    const failure = r.failures.find((f) => f.index === 1);
+    expect(failure).toBeDefined();
+    expect(failure?.actual).toBeNull(); // sanitized the same way canon() renders it
+  });
 });
 
 describe("grade - javascript", () => {

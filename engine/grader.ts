@@ -115,8 +115,14 @@ for i, t in enumerate(tests):
         failures.append({"index": i, "args": t["args"], "expected": t["expected"],
                          "error": traceback.format_exc(limit=2)})
 
-print("ATROPHY_RESULT " + json.dumps({"passed": passed, "total": len(tests),
-                                      "failures": failures}))
+result = {"passed": passed, "total": len(tests), "failures": failures}
+# The same normalize() used for comparison above - not a separate pass, so the two
+# sanitization sites cannot drift apart. Without this, a raw NaN/Infinity anywhere in a
+# failure's "actual" (json.dumps allows it by default, emitting the bareword tokens
+# NaN/Infinity/-Infinity, which are not valid JSON) makes this whole line unparseable on
+# the TS side - zeroing every case, including the ones that genuinely passed, instead of
+# scoring the NaN/Infinity case as the one failure it actually is.
+print("ATROPHY_RESULT " + json.dumps(normalize(result)))
 `;
 }
 
