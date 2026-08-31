@@ -348,6 +348,25 @@ describe.skipIf(!hasJdk())("grade - java", () => {
     expect(r.harnessError).toMatch(/timed out/);
     // The budget must cover compile (its own timeout) plus the timed-out run.
   }, JAVA_COMPILE_TIMEOUT_MS + 60_000);
+
+  it("bounds a huge thrown-exception message on the write/fix path (Harness.java's describeThrowable)", async () => {
+    const dir = scratch();
+    // The exception message is effectively attacker-controlled: it is exactly what a
+    // submitted solution chose to throw, embedded via t.toString() with no limit.
+    writeSolution(
+      dir,
+      javaEx,
+      'public class Solution {\n    static int twice(int x) { throw new RuntimeException("x".repeat(5000)); }\n}\n',
+    );
+    const r = await grade(javaEx, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(0);
+    expect(r.total).toBe(3);
+    const failure = r.failures[0];
+    expect(failure?.error).toBeTruthy();
+    expect((failure?.error as string).length).toBeLessThan(2200);
+    expect(failure?.error).toMatch(/\.\.\. \(\d+ more chars\)$/);
+  }, 60_000);
 });
 
 describe.skipIf(!hasJdk())("grade - java type matrix", () => {
