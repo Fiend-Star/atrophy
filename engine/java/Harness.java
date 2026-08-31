@@ -307,8 +307,11 @@ public final class Harness {
      * large collection as the right answer, and a wrong submission's diff against it
      * can single-handedly approach runner.ts's 256KB output cap - which turns a real
      * failure into "please report this exercise" (parseMarker's honest-cap branch
-     * exists for exactly that case, but this stops it at the source instead). The
-     * codec itself (Json.write) is untouched; this only bounds what gets displayed.
+     * exists for exactly that case). This bound is per-value, not per-marker-line, so
+     * the cap is still reachable on a run with enough failing cases (roughly 85+ of this
+     * shape) - it raises that threshold well past shipped drill sizes rather than
+     * removing it; parseMarker's honest message is the floor once a run does cross it.
+     * The codec itself (Json.write) is untouched; this only bounds what gets displayed.
      */
     private static Object bounded(Object v) {
         String json = Json.write(v);
