@@ -16,10 +16,16 @@ import {
   gradeRecall,
   normalizeOutput,
   normalizeRecallAnswer,
+  parseMarker,
   solutionFileName,
   WHITESPACE_PARTIAL_CREDIT,
 } from "./grader.js";
 import { JAVA_COMPILE_TIMEOUT_MS, hasJdk } from "./javatool.js";
+import type { RunResult } from "./runner.js";
+
+function fakeRunResult(over: Partial<RunResult> = {}): RunResult {
+  return { stdout: "", stderr: "", exitCode: 0, timedOut: false, durationMs: 1, truncated: false, ...over };
+}
 
 const dirs: string[] = [];
 function scratch(): string {
@@ -98,6 +104,48 @@ describe("grade - python", () => {
     expect(r.passed).toBe(0);
     expect(r.harnessError).toMatch(/timed out/);
   }, 20_000);
+
+  it("gives an honest cap message, not the generic one, when a real run's output blows the cap before its marker", async () => {
+    const dir = scratch();
+    // Printed inside the graded function, so it lands on the same stdout the harness's
+    // own ATROPHY_RESULT line would use - three calls of this size comfortably exceed
+    // the 256KB cap before the harness gets to print its marker.
+    writeSolution(dir, pyEx, "def double(x):\n    print('x' * 300_000)\n    return x * 2\n");
+    const r = await grade(pyEx, dir);
+    expect(r.passed).toBe(0);
+    expect(r.harnessError).toMatch(/256KB cap/i);
+    expect(r.harnessError).not.toMatch(/please report this exercise/);
+  }, 20_000);
+});
+
+describe("parseMarker - honest message when the output cap ate the marker", () => {
+  it("blames the cap, not the exercise, when no marker line survived a truncated run", () => {
+    const r = parseMarker(fakeRunResult({ stdout: "garbage before the cap hit", truncated: true }), 3, 15_000);
+    expect(r.harnessError).toMatch(/256KB cap/i);
+    expect(r.harnessError).not.toMatch(/please report this exercise/);
+  });
+
+  it("blames the cap, not the exercise, when a truncated run leaves an unparseable marker line", () => {
+    const r = parseMarker(fakeRunResult({ stdout: "ATROPHY_RESULT {oops", truncated: true }), 3, 15_000);
+    expect(r.harnessError).toMatch(/256KB cap/i);
+    expect(r.harnessError).not.toMatch(/please report this exercise/);
+  });
+
+  it("blames the cap, not the exercise, when a truncated run's marker parses but is not an object", () => {
+    const r = parseMarker(fakeRunResult({ stdout: "ATROPHY_RESULT null", truncated: true }), 3, 15_000);
+    expect(r.harnessError).toMatch(/256KB cap/i);
+  });
+
+  it("keeps the generic message when the run was not truncated - a real exercise bug still reads as one", () => {
+    const r = parseMarker(fakeRunResult({ stdout: "ATROPHY_RESULT {oops", truncated: false }), 3, 15_000);
+    expect(r.harnessError).toMatch(/unparseable ATROPHY_RESULT/);
+    expect(r.harnessError).not.toMatch(/256KB cap/i);
+  });
+
+  it("keeps the exit-code fallback message when nothing was truncated and no marker printed at all", () => {
+    const r = parseMarker(fakeRunResult({ stdout: "", stderr: "", exitCode: 1, truncated: false }), 3, 15_000);
+    expect(r.harnessError).toMatch(/harness produced no result \(exit 1\)/);
+  });
 });
 
 describe("grade - javascript", () => {
@@ -274,6 +322,20 @@ describe.skipIf(!hasJdk())("grade - java type matrix", () => {
       [{ args: ["z"], expected: { a: 2, z: 1 } }],
     );
     expect(r.passed).toBe(1);
+  }, 60_000);
+
+  it("bounds a large expected/actual payload in a failure message so one wrong answer cannot blow the output cap alone", async () => {
+    const r = await gradeWith(
+      "import java.util.List;\nimport java.util.ArrayList;\npublic class Solution { static List<Integer> probe(int n) { return new ArrayList<>(); } }",
+      [{ args: [1000], expected: Array.from({ length: 1000 }, (_, i) => i) }],
+    );
+    expect(r.passed).toBe(0);
+    const failure = r.failures[0];
+    // "actual" (the wrong, empty list) is small and stays structured; "expected" (1000
+    // entries) blows the 1KB per-value budget and is elided to a string with a tail.
+    expect(failure?.actual).toEqual([]);
+    expect(typeof failure?.expected).toBe("string");
+    expect(failure?.expected as string).toMatch(/\.\.\. \(\d+ more chars\)$/);
   }, 60_000);
 
   it("accepts char params as 1-char strings; names overload ambiguity", async () => {

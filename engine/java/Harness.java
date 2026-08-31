@@ -55,8 +55,8 @@ public final class Harness {
             Object expected = test.get("expected");
             Map<String, Object> failure = new TreeMap<>();
             failure.put("index", (long) i);
-            failure.put("args", testArgs);
-            failure.put("expected", expected);
+            failure.put("args", bounded(testArgs));
+            failure.put("expected", bounded(expected));
             try {
                 Method method = findMethod(solutionClass, functionName, testArgs.size());
                 Object target = Modifier.isStatic(method.getModifiers()) ? null : solutionClass.getDeclaredConstructor().newInstance();
@@ -71,7 +71,7 @@ public final class Harness {
                 if (Json.write(canonActual).equals(Json.write(canonExpected))) {
                     passed++;
                 } else {
-                    failure.put("actual", canonActual);
+                    failure.put("actual", bounded(canonActual));
                     failures.add(failure);
                 }
             } catch (InvocationTargetException e) {
@@ -296,6 +296,25 @@ public final class Harness {
 
     private static String typeName(Object v) {
         return v == null ? "null" : v.getClass().getSimpleName();
+    }
+
+    /** A failure value's JSON form beyond this is elided - see {@link #bounded}. */
+    private static final int MAX_VALUE_CHARS = 1024;
+
+    /**
+     * Bound how much of one failure value (args, expected, or actual) reaches the
+     * ATROPHY_RESULT line. A "handles a big input" exercise can legitimately have a
+     * large collection as the right answer, and a wrong submission's diff against it
+     * can single-handedly approach runner.ts's 256KB output cap - which turns a real
+     * failure into "please report this exercise" (parseMarker's honest-cap branch
+     * exists for exactly that case, but this stops it at the source instead). The
+     * codec itself (Json.write) is untouched; this only bounds what gets displayed.
+     */
+    private static Object bounded(Object v) {
+        String json = Json.write(v);
+        if (json.length() <= MAX_VALUE_CHARS) return v;
+        int more = json.length() - MAX_VALUE_CHARS;
+        return json.substring(0, MAX_VALUE_CHARS) + "... (" + more + " more chars)";
     }
 
     /** The top user frames only: the reflective call plumbing under them is our noise, not theirs. */

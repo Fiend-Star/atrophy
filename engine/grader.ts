@@ -279,11 +279,25 @@ async function gradeSql(ex: SqlWriteExercise, dir: string): Promise<GradeResult>
 }
 
 /**
+ * A missing or unparseable marker line usually means a broken exercise - but if the
+ * run's stdout hit runner.ts's output cap (RUNNER_OUTPUT_CAP below, defined once and
+ * referenced here even though it appears later in the file - both are module-level
+ * consts, and this function only runs after the whole module has finished loading),
+ * the marker (or whatever preceded it) may simply have been cut off. That is not
+ * evidence the exercise is wrong, so it gets an honest message instead of the generic
+ * one, which would otherwise send a user or a content author chasing a bug that is
+ * really just a big failure diff.
+ */
+function cappedHarnessError(): string {
+  return `output exceeded the ${RUNNER_OUTPUT_CAP / 1024}KB cap before the result marker - the failure diff may be too large; not necessarily an exercise bug`;
+}
+
+/**
  * Turn a finished harness run into a GradeResult: the timeout wins, then the
  * last ATROPHY_RESULT line, then whatever the process said before dying.
  * Shared by every language path so they fail the same way.
  */
-function parseMarker(result: RunResult, total: number, timeoutMs: number): GradeResult {
+export function parseMarker(result: RunResult, total: number, timeoutMs: number): GradeResult {
   if (result.timedOut) {
     return {
       passed: 0,
@@ -298,6 +312,9 @@ function parseMarker(result: RunResult, total: number, timeoutMs: number): Grade
     .reverse()
     .find((l) => l.startsWith(RESULT_MARKER));
   if (!line) {
+    if (result.truncated) {
+      return { passed: 0, total, failures: [], harnessError: cappedHarnessError() };
+    }
     const detail = (result.stderr || result.stdout).trim().slice(0, 2000);
     return {
       passed: 0,
@@ -314,7 +331,9 @@ function parseMarker(result: RunResult, total: number, timeoutMs: number): Grade
     passed: 0,
     total,
     failures: [],
-    harnessError: "harness printed an unparseable ATROPHY_RESULT line - please report this exercise",
+    harnessError: result.truncated
+      ? cappedHarnessError()
+      : "harness printed an unparseable ATROPHY_RESULT line - please report this exercise",
   };
   let parsed: unknown;
   try {
