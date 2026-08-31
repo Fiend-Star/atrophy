@@ -112,8 +112,12 @@ for i, t in enumerate(tests):
             failures.append({"index": i, "args": t["args"],
                              "expected": t["expected"], "actual": actual})
     except Exception:
+        # limit=2 bounds the traceback's *frames*, not its characters - the exception's own
+        # message (e.g. from a submitted solution's own raise) is effectively attacker-
+        # controlled and unbounded on its own. [:2000] mirrors the budget describeThrowable
+        # uses in Harness.java, so a single huge throw cannot approach the output cap.
         failures.append({"index": i, "args": t["args"], "expected": t["expected"],
-                         "error": traceback.format_exc(limit=2)})
+                         "error": traceback.format_exc(limit=2)[:2000]})
 
 result = {"passed": passed, "total": len(tests), "failures": failures}
 # The same normalize() used for comparison above - not a separate pass, so the two
@@ -162,7 +166,11 @@ tests.forEach((t, i) => {
     if (canon(actual) === canon(t.expected)) passed += 1;
     else failures.push({ index: i, args: t.args, expected: t.expected, actual });
   } catch (err) {
-    failures.push({ index: i, args: t.args, expected: t.expected, error: String(err && err.stack || err).split("\\n").slice(0, 3).join("\\n") });
+    // .slice(0, 3) bounds the *lines* kept, not their length - the error's own message
+    // (e.g. from a submitted solution's own throw) is effectively attacker-controlled and
+    // unbounded on its own. The trailing .slice(0, 2000) mirrors describeThrowable's budget
+    // in Harness.java, so a single huge throw cannot approach the output cap.
+    failures.push({ index: i, args: t.args, expected: t.expected, error: String(err && err.stack || err).split("\\n").slice(0, 3).join("\\n").slice(0, 2000) });
   }
 });
 emit({ passed, total, failures });

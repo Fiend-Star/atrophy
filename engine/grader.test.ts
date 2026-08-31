@@ -116,6 +116,32 @@ describe("grade - python", () => {
     expect(r.harnessError).toMatch(/256KB cap/i);
     expect(r.harnessError).not.toMatch(/please report this exercise/);
   }, 20_000);
+
+  it("bounds a huge thrown-exception message so an earlier, genuinely-passing case is not zeroed", async () => {
+    const dir = scratch();
+    const mixedEx: CodeExercise = {
+      ...pyEx,
+      id: "sr-py-914",
+      functionName: "maybe_throws",
+      starterCode: "def maybe_throws(x):\n    pass\n",
+      tests: [
+        { args: [1], expected: 2 },
+        { args: [0], expected: 2 },
+      ],
+    };
+    writeSolution(
+      dir,
+      mixedEx,
+      "def maybe_throws(x):\n    if x == 0:\n        raise ValueError('z' * 300000)\n    return x * 2\n",
+    );
+    const r = await grade(mixedEx, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.total).toBe(2);
+    expect(r.passed).toBe(1); // case 0 (x=1) really did pass
+    const failure = r.failures.find((f) => f.index === 1);
+    expect(failure).toBeDefined();
+    expect((failure?.error as string).length).toBeLessThanOrEqual(2000);
+  });
 });
 
 describe("parseMarker - honest message when the output cap ate the marker", () => {
@@ -279,6 +305,32 @@ describe("grade - javascript", () => {
     writeSolution(dir, ex, "function make() { return { b: 2, a: 1 }; }\nmodule.exports = { make };\n");
     const r = await grade(ex, dir);
     expect(r.passed).toBe(1);
+  });
+
+  it("bounds a huge thrown-exception message so an earlier, genuinely-passing case is not zeroed", async () => {
+    const dir = scratch();
+    const mixedEx: CodeExercise = {
+      ...jsEx,
+      id: "sr-js-903",
+      functionName: "maybeThrows",
+      starterCode: "function maybeThrows(x) {}\nmodule.exports = { maybeThrows };\n",
+      tests: [
+        { args: [1], expected: 2 },
+        { args: [0], expected: 2 },
+      ],
+    };
+    writeSolution(
+      dir,
+      mixedEx,
+      "function maybeThrows(x) { if (x === 0) throw new Error('z'.repeat(300000)); return x * 2; }\nmodule.exports = { maybeThrows };\n",
+    );
+    const r = await grade(mixedEx, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.total).toBe(2);
+    expect(r.passed).toBe(1); // case 0 (x=1) really did pass
+    const failure = r.failures.find((f) => f.index === 1);
+    expect(failure).toBeDefined();
+    expect((failure?.error as string).length).toBeLessThanOrEqual(2000);
   });
 });
 
