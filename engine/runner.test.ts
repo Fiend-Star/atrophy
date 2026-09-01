@@ -70,3 +70,20 @@ describe("run env", () => {
     expect(env.PYTHONIOENCODING).toBe("utf-8:backslashreplace");
   });
 });
+
+describe("run - output cap truncation flag", () => {
+  it("flags stdout the cap actually cut off", async () => {
+    // Comfortably past the 256KB cap, so the flag can only be true if data was really lost.
+    const r = await run(process.execPath, ["-e", "process.stdout.write('x'.repeat(1_000_000))"], {
+      cwd: process.cwd(),
+      timeoutMs: 15_000,
+    });
+    expect(r.stdout.length).toBeLessThan(1_000_000);
+    expect(r.truncated).toBe(true);
+  });
+
+  it("does not flag ordinary output that never approaches the cap", async () => {
+    const r = await run(process.execPath, ["-e", "console.log('hi')"], { cwd: process.cwd(), timeoutMs: 15_000 });
+    expect(r.truncated).toBe(false);
+  });
+});

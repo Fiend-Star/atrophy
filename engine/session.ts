@@ -204,11 +204,14 @@ async function readMultiline(rl: Interface): Promise<string> {
 
 // ---------- write / fix (editor + hidden tests) ----------
 
-function commentPrefix(ex: CodeLikeExercise): string {
-  if (ex.language === "python") return "#";
-  // sql is not a "//" language: the header below is prepended to the file the grader
-  // hands straight to db.prepare(), so the wrong prefix fails the drill before the
-  // user's query is even read.
+/**
+ * The header below is prepended to the file the grader hands straight to the language's
+ * runtime, so the wrong prefix fails the drill before the user's answer is even read -
+ * which is why sql gets "--" (SQLite rejects "//") and why shell rides python's "#"
+ * rather than the "//" fallthrough (bash would read that as a path).
+ */
+export function commentPrefix(ex: CodeLikeExercise): string {
+  if (ex.language === "python" || ex.language === "shell") return "#";
   if (ex.language === "sql") return "--";
   return "//";
 }

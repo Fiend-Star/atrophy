@@ -63,7 +63,7 @@ Not every skill is "write code against tests" - see the table below.
 | **Debugging** | Working-looking code has one planted bug - find and fix it | Hidden tests |
 | **Code reading** | Read a snippet, type exactly what it prints | Compared to the snippet's real output |
 | **API memory** | Fill in the blanked-out stdlib call, implement the API against a shipped harness, or answer a short recall question testing a general fact. Packs can add a multi-blank snippet scored one point per blank | Answer match, or harness checks |
-| **Decomposition** | Outline a design (rate limiter, folder sync…) in bullets - or build it: an algorithm against tests, a data structure against its own harness | Self-scored against a revealed rubric; the build drills by tests or harness checks |
+| **Decomposition** | Outline a design (rate limiter, folder sync…) in bullets, graded on the choice itself - or build one you're handed: an algorithm against tests, a data structure against its own harness, graded on the implementation, not the choice | Self-scored against a revealed rubric; the build drills by tests or harness checks |
 
 The built-in bank spans Python, JavaScript, Java and SQL across three tiers -
 a hand-written static bank plus **generator families that render endless fresh
@@ -161,7 +161,7 @@ atrophy baseline
 | `atrophy baseline` | First session: one drill per skill (~25 min) |
 | `atrophy drill` | One drill on your most-neglected skill |
 | `atrophy drill --axis debugging` | Drill a specific skill (`syntax-recall`, `debugging`, `code-reading`, `api-memory`, `decomposition`) |
-| `atrophy drill --lang python` | Restrict to Python (or `javascript`, `java`, `sql`) - language-agnostic drills still qualify, so a rep may come back in no language at all; packs may add drills that declare no language, and those qualify too |
+| `atrophy drill --lang python` | Restrict to Python (or `javascript`, `java`, `sql`, `shell`) - language-agnostic drills still qualify, so a rep may come back in no language at all; packs may add drills that declare no language, and those qualify too. `shell` is accepted but the built-in bank ships no shell drills yet, so on its own it reaches only the language-agnostic ones (API memory and decomposition) |
 | `atrophy drill --ai-on` | Monthly comparison rep with AI allowed |
 | `atrophy publish --handle you` | Opt in to the [public leaderboard](https://ashutosh-rath02.github.io/atrophy/leaderboard.html); afterwards every drill syncs automatically (`--stop` opts out) |
 | `atrophy stats` | Ratings table and week streak in the terminal |
@@ -254,6 +254,23 @@ plus the `expectedRows` the answer must return. CI applies every fixture
 twice to prove it builds the same database both times, and for each such
 exercise it synthesizes the hardcoded-literal answer and requires that it
 fail at least one case - a question one literal could answer cannot merge.
+
+Shell write exercises (`"language": "shell"`, `"kind": "write"`) carry
+`shellCases`. Each case is a world of its own: a `files` map of relative
+paths to contents staged into a fresh directory, the `args` the script is
+called with, and the exact `expectedStdout` and exit status running it must
+produce. Two cases have to differ in that pair, so a script that prints one
+answer cannot pass. The answer itself ships beside the exercise as
+`<id>.reference.sh` - a real script rather than a JSON string, so it stays
+readable and runs by hand. CI grades that reference by really running it
+under bash and requires a perfect score, grades it a second time and requires
+byte-identical results, and synthesizes the script that echoes case 1's
+expected output and requires that it fail at least one case. It also lints
+every shipped script for what would grade differently on two machines:
+backgrounding, absolute paths, `$RANDOM`/`$$`/the clock, and any command
+outside the pinned toolchain in `engine/bashtool.ts`. Shell drills need bash
+≥ 4 (Git for Windows ships one); a host without it is offered the rest of the
+bank instead of being nagged.
 
 Roadmap: LLM-judged decomposition drills, more languages, spaced-repetition
 scheduling (FSRS), per-axis leaderboards. More to be added soon.

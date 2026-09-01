@@ -6,13 +6,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ClozeExercise,
   CodeExercise,
+  CodeLikeExercise,
   Exercise,
   HarnessExercise,
   RecallExercise,
   SqlWriteExercise,
 } from "../bank/schema.js";
 import { hasJdk } from "./javatool.js";
-import { previewExercise, runDrill, type DrillOutcome } from "./session.js";
+import { commentPrefix, previewExercise, runDrill, type DrillOutcome } from "./session.js";
 
 const dirs: string[] = [];
 function scratch(): string {
@@ -255,6 +256,21 @@ describe("runDrill - --solution when grading never ran", () => {
     expect(outcome.score).toBe(0);
     expect(lines.join("\n")).toContain("Your code did not run");
   }, 30_000);
+});
+
+describe("commentPrefix", () => {
+  it("uses each language's own comment syntax", () => {
+    // The header this builds is prepended to the file the grader hands straight to the
+    // toolchain, so the wrong prefix fails the drill before the user's answer is read -
+    // that is why sql got "--", and why shell rides python's "#": the "//" fallthrough
+    // would put a comment bash reads as a path at the top of every script.
+    const prefixed = (language: string) => commentPrefix({ ...pyEx, language } as CodeLikeExercise);
+    expect(prefixed("python")).toBe("#");
+    expect(prefixed("shell")).toBe("#");
+    expect(prefixed("sql")).toBe("--");
+    expect(prefixed("javascript")).toBe("//");
+    expect(prefixed("java")).toBe("//");
+  });
 });
 
 const sqlEx: SqlWriteExercise = {

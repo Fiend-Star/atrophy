@@ -6,6 +6,9 @@ export interface RunResult {
   exitCode: number | null;
   timedOut: boolean;
   durationMs: number;
+  /** stdout hit MAX_OUTPUT_BYTES and further output was dropped - a mismatch downstream
+   *  may be the cap, not the answer. */
+  truncated: boolean;
 }
 
 export interface RunOptions {
@@ -81,6 +84,7 @@ export function run(
         exitCode: code,
         timedOut,
         durationMs: Date.now() - started,
+        truncated: stdout.length >= MAX_OUTPUT_BYTES,
       });
     });
   });

@@ -1,16 +1,19 @@
-import { copyFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join } from "node:path";
-import { isHarness, isSqlWrite } from "../bank/schema.js";
+import { dirname, join } from "node:path";
+import { isHarness, isShellWrite, isSqlWrite, stagedFileKeyProblem } from "../bank/schema.js";
 import type {
   CodeLikeExercise,
   HarnessExercise,
   OutlineExercise,
   PredictExercise,
   RecallExercise,
+  ShellCase,
+  ShellWriteExercise,
   SqlWriteExercise,
   TestedExercise,
 } from "../bank/schema.js";
+import { bashCommand, missingBashHint, PINNED_TOOLS, SHELL_ENV } from "./bashtool.js";
 import {
   JAVA_COMPILE_TIMEOUT_MS,
   JAVA_RUNTIME_FLAGS,
@@ -23,8 +26,16 @@ import { run, type RunResult } from "./runner.js";
 
 export interface TestFailure {
   index: number;
-  /** Absent for exercise-supplied harnesses: an Atrophy check is a named assertion, not a call. */
-  args?: unknown[];
+  /**
+   * Absent for exercise-supplied harnesses: an Atrophy check is a named assertion, not a
+   * call. On the java write/fix path, Harness.java's `bounded()` (engine/java/Harness.java)
+   * may substitute the elided *JSON text* of an oversized value - as a plain string - for
+   * `args`/`expected`/`actual` alike, so `args` is typed to admit that rather than promise
+   * an array grading never actually guarantees. `expected`/`actual` were already `unknown`
+   * and need no change. The two readers of `.args` (engine/session.ts: the `undefined`
+   * check, and the `JSON.stringify` display) are both safe against either shape.
+   */
+  args?: unknown[] | string;
   expected?: unknown;
   actual?: unknown;
   error?: string;
@@ -44,6 +55,7 @@ export function solutionFileName(ex: CodeLikeExercise | OutlineExercise): string
   if (ex.kind === "outline") return "outline.md";
   if (ex.language === "java") return "Solution.java";
   if (ex.language === "sql") return "solution.sql";
+  if (ex.language === "shell") return "solution.sh";
   return ex.language === "python" ? "solution.py" : "solution.js";
 }
 
@@ -54,7 +66,7 @@ export function pythonCommand(): string {
 
 function pythonHarness(ex: TestedExercise): string {
   const tests = JSON.stringify(ex.tests);
-  return `import importlib.util, json, sys, traceback
+  return `import importlib.util, json, math, sys, traceback
 
 spec = importlib.util.spec_from_file_location("solution", "solution.py")
 mod = importlib.util.module_from_spec(spec)
@@ -70,8 +82,31 @@ except Exception:
     sys.exit(0)
 
 tests = json.loads(${JSON.stringify(tests)})
+
+# Mirrors engine/java/Harness.java's codec (see its "Number model" doc comment), which
+# in turn mirrors JSON.stringify: an integral finite float renders as its int form, and
+# NaN/Infinity render as null. This can only ever *widen* what compares equal - the JS
+# JSON.stringify round-trip that embeds \`tests\` above already collapses any originally-
+# float integral \`expected\`/\`args\` value to an int before Python ever sees it, so
+# normalize() only has real work to do on \`actual\`, the solution's own return value.
+# bool is never touched: isinstance(v, float) is False for bool (a python int subclass),
+# so True/False pass straight through the final \`return v\`.
+_INT_SAFE_MAX = 9007199254740992.0  # 2**53, the same bound Harness.java's writeDouble uses
+def normalize(v):
+    if isinstance(v, float):
+        if not math.isfinite(v):
+            return None
+        if v == int(v) and abs(v) <= _INT_SAFE_MAX:
+            return int(v)
+        return v
+    if isinstance(v, list):
+        return [normalize(x) for x in v]
+    if isinstance(v, dict):
+        return {k: normalize(x) for k, x in v.items()}
+    return v
+
 def canon(v):
-    return json.dumps(v, sort_keys=True, default=str)
+    return json.dumps(normalize(v), sort_keys=True, default=str)
 
 failures = []
 passed = 0
@@ -85,11 +120,21 @@ for i, t in enumerate(tests):
             failures.append({"index": i, "args": t["args"],
                              "expected": t["expected"], "actual": actual})
     except Exception:
+        # limit=2 bounds the traceback's *frames*, not its characters - the exception's own
+        # message (e.g. from a submitted solution's own raise) is effectively attacker-
+        # controlled and unbounded on its own. [:2000] mirrors the budget describeThrowable
+        # uses in Harness.java, so a single huge throw cannot approach the output cap.
         failures.append({"index": i, "args": t["args"], "expected": t["expected"],
-                         "error": traceback.format_exc(limit=2)})
+                         "error": traceback.format_exc(limit=2)[:2000]})
 
-print("ATROPHY_RESULT " + json.dumps({"passed": passed, "total": len(tests),
-                                      "failures": failures}))
+result = {"passed": passed, "total": len(tests), "failures": failures}
+# The same normalize() used for comparison above - not a separate pass, so the two
+# sanitization sites cannot drift apart. Without this, a raw NaN/Infinity anywhere in a
+# failure's "actual" (json.dumps allows it by default, emitting the bareword tokens
+# NaN/Infinity/-Infinity, which are not valid JSON) makes this whole line unparseable on
+# the TS side - zeroing every case, including the ones that genuinely passed, instead of
+# scoring the NaN/Infinity case as the one failure it actually is.
+print("ATROPHY_RESULT " + json.dumps(normalize(result)))
 `;
 }
 
@@ -129,7 +174,11 @@ tests.forEach((t, i) => {
     if (canon(actual) === canon(t.expected)) passed += 1;
     else failures.push({ index: i, args: t.args, expected: t.expected, actual });
   } catch (err) {
-    failures.push({ index: i, args: t.args, expected: t.expected, error: String(err && err.stack || err).split("\\n").slice(0, 3).join("\\n") });
+    // .slice(0, 3) bounds the *lines* kept, not their length - the error's own message
+    // (e.g. from a submitted solution's own throw) is effectively attacker-controlled and
+    // unbounded on its own. The trailing .slice(0, 2000) mirrors describeThrowable's budget
+    // in Harness.java, so a single huge throw cannot approach the output cap.
+    failures.push({ index: i, args: t.args, expected: t.expected, error: String(err && err.stack || err).split("\\n").slice(0, 3).join("\\n").slice(0, 2000) });
   }
 });
 emit({ passed, total, failures });
@@ -275,11 +324,28 @@ async function gradeSql(ex: SqlWriteExercise, dir: string): Promise<GradeResult>
 }
 
 /**
+ * A missing or unparseable marker line usually means a broken exercise - but if the
+ * run's stdout hit runner.ts's output cap (RUNNER_OUTPUT_CAP below, defined once and
+ * referenced here even though it appears later in the file - both are module-level
+ * consts, and this function only runs after the whole module has finished loading),
+ * the marker (or whatever preceded it) may simply have been cut off. That is not
+ * evidence the exercise is wrong, so it gets an honest message instead of the generic
+ * one, which would otherwise send a user or a content author chasing a bug that is
+ * really just a big failure diff.
+ */
+function cappedHarnessError(): string {
+  // "reached", not "exceeded": `truncated` is true once stdout.length >= the cap, which
+  // includes the exact-boundary case where nothing was actually dropped (F2) - "exceeded"
+  // would be a false claim there.
+  return `output reached the ${RUNNER_OUTPUT_CAP / 1024}KB cap before the result marker - the failure diff may be too large; not necessarily an exercise bug`;
+}
+
+/**
  * Turn a finished harness run into a GradeResult: the timeout wins, then the
  * last ATROPHY_RESULT line, then whatever the process said before dying.
  * Shared by every language path so they fail the same way.
  */
-function parseMarker(result: RunResult, total: number, timeoutMs: number): GradeResult {
+export function parseMarker(result: RunResult, total: number, timeoutMs: number): GradeResult {
   if (result.timedOut) {
     return {
       passed: 0,
@@ -294,6 +360,9 @@ function parseMarker(result: RunResult, total: number, timeoutMs: number): Grade
     .reverse()
     .find((l) => l.startsWith(RESULT_MARKER));
   if (!line) {
+    if (result.truncated) {
+      return { passed: 0, total, failures: [], harnessError: cappedHarnessError() };
+    }
     const detail = (result.stderr || result.stdout).trim().slice(0, 2000);
     return {
       passed: 0,
@@ -310,7 +379,9 @@ function parseMarker(result: RunResult, total: number, timeoutMs: number): Grade
     passed: 0,
     total,
     failures: [],
-    harnessError: "harness printed an unparseable ATROPHY_RESULT line - please report this exercise",
+    harnessError: result.truncated
+      ? cappedHarnessError()
+      : "harness printed an unparseable ATROPHY_RESULT line - please report this exercise",
   };
   let parsed: unknown;
   try {
@@ -333,6 +404,281 @@ function parseMarker(result: RunResult, total: number, timeoutMs: number): Grade
       ? graded.failures.filter((f) => f !== null && typeof f === "object")
       : [],
   };
+}
+
+/**
+ * runner.ts stops appending output once it holds 256 KB, and the cap is private to that
+ * module - so it is mirrored here rather than imported. A capped run is the one mismatch
+ * that is not about the answer (a runaway loop's first 256 KB will not equal anything an
+ * exercise expects), so the failure has to say so instead of reading as a mystery.
+ * `grader.shell.test.ts` pins the mirror against a real over-cap run.
+ */
+const RUNNER_OUTPUT_CAP = 256 * 1024;
+
+/** Did the runner cut this output off? Its cap check runs *before* appending a chunk. */
+export function shellOutputTruncated(stdout: string): boolean {
+  return stdout.length >= RUNNER_OUTPUT_CAP;
+}
+
+/** How much of a mismatch to show before "..." - the sql preview budget. */
+const SHELL_PREVIEW_CHARS = 300;
+
+/** One finished shell case, as the failure builder sees it: no run, no fs, no bash. */
+export interface ShellCaseReport {
+  /** 1-based, because it is printed. */
+  caseNumber: number;
+  expectedStdout: string;
+  stdout: string;
+  expectedExitCode: number;
+  exitCode: number | null;
+  stderr: string;
+  /** The runner hit its output cap: the mismatch may be the cap rather than the answer. */
+  truncated: boolean;
+}
+
+function shellPreview(s: string): string {
+  // Quoted: in a pipeline drill the layout is half the answer, so "a\nb" vs "a b" has
+  // to be visible as a difference rather than as two lines the reader aligns by eye.
+  const quoted = JSON.stringify(s);
+  return quoted.length > SHELL_PREVIEW_CHARS ? `${quoted.slice(0, SHELL_PREVIEW_CHARS)}...` : quoted;
+}
+
+/**
+ * The whole verdict for one shell case: `undefined` when it passed, otherwise the line
+ * the drill prints. Comparison and naming live in one function on purpose - the message
+ * has to name exactly what differed, which a builder that did not decide could not do.
+ *
+ * `WHITESPACE_PARTIAL_CREDIT` deliberately has no counterpart here: it is predict-output's
+ * rule, and in a pipeline drill the column alignment often *is* the answer.
+ */
+export function shellCaseFailure(r: ShellCaseReport): string | undefined {
+  const outputMatches = normalizeOutput(r.stdout) === normalizeOutput(r.expectedStdout);
+  const statusMatches = r.exitCode === r.expectedExitCode;
+  if (outputMatches && statusMatches) return undefined;
+
+  // null is what the runner reports for a signal kill; a bare "null" would read as a
+  // number the user was supposed to produce.
+  const got = r.exitCode === null ? "killed by a signal" : String(r.exitCode);
+  const what = [
+    ...(outputMatches ? [] : ["wrong stdout"]),
+    ...(statusMatches ? [] : [`wrong exit status (expected ${r.expectedExitCode}, got ${got})`]),
+  ];
+  const lines = [`case ${r.caseNumber}: ${what.join(", ")}`];
+  if (!outputMatches) {
+    lines.push(`  expected: ${shellPreview(normalizeOutput(r.expectedStdout))}`);
+    lines.push(`  got:      ${shellPreview(normalizeOutput(r.stdout))}`);
+  }
+  if (r.truncated) {
+    lines.push(`  (output was capped at ${RUNNER_OUTPUT_CAP} characters - the script printed far more than the drill asks for)`);
+  }
+  const stderr = r.stderr.trim();
+  if (stderr) lines.push(`  stderr: ${stderr.slice(0, 500)}`);
+  return lines.join("\n");
+}
+
+/**
+ * The P2 signature: which `PINNED_TOOLS` members bash reported missing. A drill may
+ * assume every one of them, so a `command not found` naming one is a broken toolchain -
+ * never evidence about the user. A name outside the set is an ordinary failure: the
+ * answer reached for a tool the contract does not provide.
+ *
+ * `LC_ALL=C` is what makes matching the English message sound; SHELL_ENV pins it.
+ */
+export function missingPinnedTools(stderr: string): string[] {
+  const found = new Set<string>();
+  for (const m of stderr.matchAll(/([^\s:]+): command not found/g)) {
+    const name = m[1]!;
+    if (PINNED_TOOLS.includes(name)) found.add(name);
+  }
+  return [...found];
+}
+
+/**
+ * The GradeResult a shell attempt collapses to when bash itself is the problem - the two
+ * ways that happens (nothing resolved, or the spawn rejected) say the same thing to the
+ * user, and neither is a score.
+ */
+export function bashUnavailable(total: number, cmd?: string, cause?: Error): GradeResult {
+  const detail = cause ? ` (${cause.message})` : "";
+  return { passed: 0, total, failures: [], harnessError: `${missingBashHint(cmd)}${detail}` };
+}
+
+/**
+ * `$HOME` for one graded case: the case's own directory, forward-slashed. A native Windows
+ * path would reach the script as a run of shell escapes (`C:\Users\...` reads `\U` as `U`),
+ * while `C:/Users/...` is a path msys and glibc both resolve.
+ */
+function shellHome(caseDir: string): string {
+  return caseDir.replace(/\\/g, "/");
+}
+
+/**
+ * Build one case's world: its own directory, its `files` written by Node (never by a shell
+ * prelude - that would need the very tools the drill is testing), then the submitted
+ * script over the top. Returns a harnessError message, or undefined when the case is ready.
+ *
+ * `files` content is staged byte-exact, deliberately: the CR-strip below is a rule about
+ * the *script* (one submission must not grade two ways across toolchains), while a fixture
+ * is authored data a drill may need CRs in - "strip the DOS line endings" is a drill.
+ */
+function stageShellCase(
+  caseDir: string,
+  c: ShellCase,
+  scriptName: string,
+  script: string,
+  caseNumber: number,
+): string | undefined {
+  // What the catch below is allowed to name: the host path in an errno message is not
+  // the user's business, and on a resubmit it is not even stable.
+  let staging = "its directory";
+  try {
+    // Cleared, not just created: the drill loop re-grades in the same temp dir on every
+    // resubmit, so a case that writes a file would otherwise find it already there on the
+    // second attempt - the same leak between attempts that fresh dirs prevent between cases.
+    rmSync(caseDir, { recursive: true, force: true });
+    mkdirSync(caseDir, { recursive: true });
+    for (const [key, contents] of Object.entries(c.files ?? {})) {
+      staging = `files key "${key}"`;
+      // Parse already rejected these keys. The assertion is here because a programmatically
+      // constructed exercise reaches the grader without passing through the schema (every
+      // production door - pack load, generator families - parses first), and "../x" is the
+      // one staging bug that is not self-limiting.
+      const problem = stagedFileKeyProblem(key);
+      if (problem) return `exercise bug: files key "${key}" ${problem} - please report this exercise`;
+      const target = join(caseDir, key);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, contents, "utf8");
+    }
+    staging = scriptName;
+    writeFileSync(join(caseDir, scriptName), script, "utf8");
+  } catch (err) {
+    // The realistic cause is a `files` map the schema cannot fault key by key - {"a": …,
+    // "a/b": …} needs `a` to be a file and a directory at once, and fails EEXIST here.
+    const code = (err as NodeJS.ErrnoException).code ?? (err as Error).name;
+    return `could not stage case ${caseNumber}: ${staging} (${code}) - please report this exercise`;
+  }
+  return undefined;
+}
+
+/**
+ * shell write: run the submitted script once per case, each in a directory of its own,
+ * and compare stdout and exit status here in TypeScript. There is no harness and no
+ * marker line - bash would have to serialize JSON to produce one, and everything the
+ * comparison needs already crosses the process boundary as stdout, stderr and a status.
+ *
+ * `env` is a parameter only so a test can grade against a fabricated `ATROPHY_BASH`:
+ * `bashCommand` bypasses its cache for an injected env, which is also why the default
+ * has to stay `process.env` - a multi-case drill must not re-resolve bash per case.
+ */
+export async function gradeShell(
+  ex: ShellWriteExercise,
+  dir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<GradeResult> {
+  const total = ex.shellCases.length;
+  const bash = bashCommand(env);
+  if (!bash) return bashUnavailable(total);
+
+  const scriptName = solutionFileName(ex);
+  let script: string;
+  try {
+    // Rule 1: msys bash tolerates CRLF and glibc bash does not, so the same submission
+    // would pass on Windows and fail on Linux. Strip the CRs and the answer is one answer.
+    // Both bluntnesses are deliberate and out of reach of real drill content: the read/write
+    // round-trip re-encodes as UTF-8 (a non-UTF-8 byte comes back U+FFFD), and *every* CR
+    // goes, not only the line-ending ones - a bare CR inside a quoted string included.
+    script = readFileSync(join(dir, scriptName), "utf8").replace(/\r/g, "");
+  } catch (err) {
+    return { passed: 0, total, failures: [], harnessError: `could not read ${scriptName}: ${(err as Error).message}` };
+  }
+
+  // One pinned environment for the whole attempt: an unpinned PATH does not merely hide
+  // the coreutils, it swaps System32's `sort` and `find` in, which answer wrongly with a
+  // clean stderr and exit 0. No signature catches that afterwards - the pin is the defense.
+  const shellEnv = SHELL_ENV(bash, env);
+  const failures: TestFailure[] = [];
+  let passed = 0;
+
+  for (const [index, c] of ex.shellCases.entries()) {
+    const caseNumber = index + 1;
+    const caseDir = join(dir, `case-${caseNumber}`);
+    const staging = stageShellCase(caseDir, c, scriptName, script, caseNumber);
+    if (staging) return { passed: 0, total, failures: [], harnessError: staging };
+
+    let result: RunResult;
+    try {
+      // argv, not a command line: the args reach the script as positional parameters
+      // with no shell in between, and the script itself is named relative to its own
+      // directory so `$0` reads the same on every host.
+      //
+      // P13, spec-accepted: the runner resolves on `close`, so a backgrounded child of
+      // the user's own script keeps holding the stdout pipe after the SIGKILL and the
+      // call can outlast testTimeoutMs by however long that child lives. The budget
+      // bounds the drill's own commands, not an orphan; shipped content may not
+      // background at all (T5 greps for `&`/`disown`/`nohup`).
+      result = await run(bash, [scriptName, ...(c.args ?? [])], {
+        cwd: caseDir,
+        timeoutMs: ex.testTimeoutMs,
+        // Per case, because the value is the case's own directory: unpinned, `$HOME` is
+        // the user's real home on Windows (msys derives it from the HOMEDRIVE/HOMEPATH
+        // libuv force-inherits) and empty under glibc - one `~` naming two different
+        // places, one of them outside the scratch dir entirely. Pinning bounds every `~`
+        // write inside the case and keeps the user's identity out of the graded run.
+        // What `$HOME` *prints* still differs by host, which is a content law rather than
+        // something an env pin can fix, and the remaining identity vars libuv forces in
+        // are out of reach from here (runner.ts documents that).
+        env: { ...shellEnv, HOME: shellHome(caseDir) },
+      });
+    } catch (err) {
+      return bashUnavailable(total, bash, err as Error);
+    }
+
+    // A killed run is not evidence about the answer, and voiding the whole attempt rather
+    // than scoring the cases that did grade follows gradeSql's bank-bug rule: a partial
+    // score is indistinguishable to the user from a half-right answer.
+    if (result.timedOut) {
+      return {
+        passed: 0,
+        total,
+        failures: [],
+        harnessError: `case ${caseNumber} timed out after ${ex.testTimeoutMs} ms (infinite loop?)`,
+      };
+    }
+
+    const failure = shellCaseFailure({
+      caseNumber,
+      expectedStdout: c.expectedStdout,
+      stdout: result.stdout,
+      expectedExitCode: c.expectedExitCode ?? 0,
+      exitCode: result.exitCode,
+      stderr: result.stderr,
+      truncated: shellOutputTruncated(result.stdout),
+    });
+    if (!failure) {
+      passed += 1;
+      continue;
+    }
+
+    // Only a case that failed is worth asking *why*. A broken toolchain fails its cases
+    // by construction - P2's shape is the tools gone, no output and exit 0 - so gating
+    // here costs the signature nothing, while consulting it on a passing case would void
+    // a correct answer over stderr the drill never graded (a script that happens to run
+    // `PATH=/nonexistent sort` as a side effect still answered the question).
+    const missing = missingPinnedTools(result.stderr);
+    if (missing.length > 0) {
+      return {
+        passed: 0,
+        total,
+        failures: [],
+        harnessError:
+          `case ${caseNumber}: bash could not find ${missing.join(", ")}, which every shell drill may use - ` +
+          `this is a broken bash install or PATH (${bash}), not your answer`,
+      };
+    }
+    failures.push({ index, error: failure });
+  }
+
+  return { passed, total, failures };
 }
 
 /** javac + java with friendly errors; returns a GradeResult on failure, or the run result. */
@@ -442,6 +788,7 @@ async function gradeHarness(ex: HarnessExercise, dir: string): Promise<GradeResu
 export async function grade(ex: CodeLikeExercise, dir: string): Promise<GradeResult> {
   if (isHarness(ex)) return gradeHarness(ex, dir);
   if (isSqlWrite(ex)) return gradeSql(ex, dir);
+  if (isShellWrite(ex)) return gradeShell(ex, dir);
   if (ex.language === "java") return gradeJavaTests(ex, dir);
 
   const isPy = ex.language === "python";

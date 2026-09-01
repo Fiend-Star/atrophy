@@ -3,6 +3,7 @@ import type { ExerciseGenerator } from "../bank/generators/types.js";
 import type { Exercise, Language } from "../bank/schema.js";
 import { mulberry32 } from "./rng.js";
 import {
+  EVERY_TOOLCHAIN,
   availableAxes,
   familyOf,
   hiddenByLanguages,
@@ -13,9 +14,15 @@ import {
   type SelectOptions,
 } from "./select.js";
 
-/** Toolchain fakes: every test says out loud which graders the host can run. */
-const JDK = { jdk: true };
-const NO_JDK = { jdk: false };
+/**
+ * Toolchain fakes: every test says out loud which graders the host can run. Two
+ * toolchains now, so every fake names both - a java assertion that left `bash` to the
+ * host would drift the day shell content lands in its pool.
+ */
+const ALL = { jdk: true, bash: true };
+const NO_JDK = { jdk: false, bash: true };
+const NO_BASH = { jdk: true, bash: false };
+const NEITHER = { jdk: false, bash: false };
 
 function ex(id: string, tier: number, language: "python" | "javascript" | "java" = "python"): Exercise {
   return {
@@ -47,8 +54,8 @@ const outlineEx: Exercise = {
   rubric: ["a"],
 };
 
-/** A java cloze: java content that no JVM ever grades. */
-function clozeEx(id: string, axis: Exercise["axis"], language: "python" | "java"): Exercise {
+/** A cloze: code-language content that no toolchain ever grades (string-matched here). */
+function clozeEx(id: string, axis: Exercise["axis"], language: Language): Exercise {
   return {
     id,
     kind: "cloze",
@@ -83,6 +90,50 @@ function fakeClozeGen(family: string, language: "python" | "java"): ExerciseGene
     language,
     tiers: [1],
     generate: (seed) => clozeEx(`${family}-${seed}`, "api-memory", language),
+  };
+}
+
+/** A shell write: `shellCases` instead of tests, and the one shell kind bash has to run. */
+function shellWriteEx(id: string, axis: Exercise["axis"] = "syntax-recall", tier = 1): Exercise {
+  return {
+    id,
+    kind: "write",
+    axis,
+    language: "shell",
+    tier,
+    title: id,
+    prompt: "p",
+    starterCode: "#!/usr/bin/env bash\n",
+    softTimeLimitSeconds: 300,
+    testTimeoutMs: 10_000,
+    shellCases: [{ expectedStdout: "1" }, { expectedStdout: "2" }],
+  };
+}
+
+/** A shell recall: shell-tagged content that starts no shell. */
+function shellRecallEx(id: string, axis: Exercise["axis"] = "syntax-recall"): Exercise {
+  return {
+    id,
+    kind: "recall",
+    axis,
+    language: "shell",
+    tier: 1,
+    title: id,
+    prompt: "p",
+    softTimeLimitSeconds: 300,
+    testTimeoutMs: 10_000,
+    acceptedAnswers: ["a"],
+  };
+}
+
+function shellWriteGen(family: string, axis: Exercise["axis"] = "syntax-recall"): ExerciseGenerator {
+  return {
+    family,
+    axis,
+    kind: "write",
+    language: "shell",
+    tiers: [1],
+    generate: (seed, tier) => shellWriteEx(`${family}-${seed}`, axis, tier),
   };
 }
 
@@ -246,7 +297,7 @@ describe("selectExercise - toolchain filtering", () => {
       statics: [javaStatic],
       generators: [javaGen],
       language: "java",
-      toolchains: JDK,
+      toolchains: ALL,
     });
     expect(pick?.language).toBe("java");
   });
@@ -319,8 +370,71 @@ describe("selectExercise - toolchain filtering", () => {
     const draw = (language: "java" | "python") =>
       selectExercise({ statics: [javaRecall], axis: "api-memory", rating: 1150, language, random: () => 0, toolchains: NO_JDK });
     expect(draw("java")?.id).toBe("api-java-recall-001");
-    expect(hiddenByToolchain({ statics: [javaRecall], axis: "api-memory", language: "java", toolchains: NO_JDK })).toBe(0);
+    expect(hiddenByToolchain({ statics: [javaRecall], axis: "api-memory", language: "java", toolchains: NO_JDK })).toEqual({ jdk: 0, bash: 0 });
     expect(draw("python")).toBeUndefined();
+  });
+});
+
+describe("selectExercise - bash toolchain filtering", () => {
+  const shellWrite = shellWriteEx("sr-sh-001"); // a write: a real bash runs the script
+  const shellGen = shellWriteGen("sr-sh-count");
+  const javaWrite = ex("sr-java-001", 1, "java");
+  const opts = { axis: "syntax-recall" as const, rating: 1150, random: () => 0 };
+
+  it("offers no shell write when the host has no bash", () => {
+    // write is shell's only graded-code kind, and grading it means running the script:
+    // without a bash the drill can only end in a harnessError, which is never evidence.
+    const pick = selectExercise({
+      ...opts,
+      statics: [shellWrite],
+      generators: [shellGen],
+      language: "shell",
+      toolchains: NO_BASH,
+    });
+    expect(pick).toBeUndefined();
+  });
+
+  it("offers them again once bash is present", () => {
+    const pick = selectExercise({
+      ...opts,
+      statics: [shellWrite],
+      generators: [shellGen],
+      language: "shell",
+      toolchains: ALL,
+    });
+    expect(pick?.language).toBe("shell");
+  });
+
+  it("keeps the shell drills bash never runs - cloze and recall are matched in-process", () => {
+    for (const stat of [clozeEx("api-sh-950", "syntax-recall", "shell"), shellRecallEx("sr-sh-950")]) {
+      const pick = selectExercise({
+        ...opts,
+        statics: [shellWrite, stat],
+        generators: [shellGen],
+        language: "shell",
+        toolchains: NO_BASH,
+      });
+      expect(pick?.id).toBe(stat.id);
+    }
+  });
+
+  it("gates the two toolchains independently", () => {
+    // A missing bash says nothing about a JVM drill, and a missing JDK nothing about a script.
+    expect(selectExercise({ ...opts, statics: [javaWrite], language: "java", toolchains: NO_BASH })?.id).toBe(
+      "sr-java-001",
+    );
+    expect(selectExercise({ ...opts, statics: [shellWrite], language: "shell", toolchains: NO_JDK })?.id).toBe(
+      "sr-sh-001",
+    );
+  });
+
+  it("hides both runnable kinds when neither toolchain is there, and still drills python", () => {
+    const pick = selectExercise({
+      ...opts,
+      statics: [javaWrite, shellWrite, ex("sr-py-001", 1)],
+      toolchains: NEITHER,
+    });
+    expect(pick?.id).toBe("sr-py-001");
   });
 });
 
@@ -343,7 +457,7 @@ describe("selectExercise - language mix soft-cap", () => {
   }
 
   it("soft-caps a language holding at least three of the six-session window", () => {
-    const pool = { statics: [javaEx, pyEx, anyEx], axis: "syntax-recall" as const, rating: 1150, toolchains: JDK };
+    const pool = { statics: [javaEx, pyEx, anyEx], axis: "syntax-recall" as const, rating: 1150, toolchains: ALL };
     const capped = langShares(400, {
       ...pool,
       recentLanguages: ["java", "java", "java", "python", "javascript", "python"],
@@ -364,7 +478,7 @@ describe("selectExercise - language mix soft-cap", () => {
       statics: [javaEx, anyEx],
       axis: "syntax-recall",
       rating: 1150,
-      toolchains: JDK,
+      toolchains: ALL,
       language: "java",
       recentLanguages: ["java", "java", "java", "java", "java", "java"],
     });
@@ -380,7 +494,7 @@ describe("selectExercise - language mix soft-cap", () => {
         generators: [fakeGen("sr-java-cond", [1], "java")],
         axis: "syntax-recall",
         rating: 1150,
-        toolchains: JDK,
+        toolchains: ALL,
         random: () => r,
         recentLanguages: ["java", "java", "java", "java", "java", "java"],
       });
@@ -395,14 +509,14 @@ describe("selectExercise - language mix soft-cap", () => {
       statics: [javaEx, anyEx],
       axis: "syntax-recall",
       rating: 1150,
-      toolchains: JDK,
+      toolchains: ALL,
       recentLanguages: ["java", "any", "java", "any", "java", "any"],
     });
     expect(shares["any"] ?? 0).toBeGreaterThan(3 * (shares["java"] ?? 0));
   });
 
   it("counts only the first six entries, and only at three or more", () => {
-    const pool = { statics: [javaEx, pyEx], axis: "syntax-recall" as const, rating: 1150, toolchains: JDK };
+    const pool = { statics: [javaEx, pyEx], axis: "syntax-recall" as const, rating: 1150, toolchains: ALL };
     // java's three appearances sit beyond the six-entry window: python's three
     // inside it cap python, java goes free.
     const windowed = langShares(400, {
@@ -430,7 +544,7 @@ describe("selectExercise - language mix soft-cap", () => {
             generators: [fakeGen("sr-py-cond", [1]), fakeGen("sr-java-cond", [1], "java")],
             axis: "syntax-recall",
             rating: 1150,
-            toolchains: JDK,
+            toolchains: ALL,
             random: rng,
             ...(recentLanguages ? { recentLanguages } : {}),
           })!.id,
@@ -469,19 +583,66 @@ describe("hiddenByToolchain", () => {
   };
 
   it("counts the JVM-graded java drills a missing JDK removed, statics and families alike", () => {
-    expect(hiddenByToolchain({ ...base, toolchains: NO_JDK })).toBe(2); // the write + the family
+    expect(hiddenByToolchain({ ...base, toolchains: NO_JDK })).toEqual({ jdk: 2, bash: 0 }); // the write + the family
   });
 
-  it("counts nothing when the host has a JDK", () => {
-    expect(hiddenByToolchain({ ...base, toolchains: JDK })).toBe(0);
+  it("counts nothing when the host has every toolchain", () => {
+    expect(hiddenByToolchain({ ...base, toolchains: ALL })).toEqual({ jdk: 0, bash: 0 });
   });
 
   it("counts nothing for a language whose drills were never offered here anyway", () => {
-    expect(hiddenByToolchain({ ...base, language: "python", toolchains: NO_JDK })).toBe(0);
+    expect(hiddenByToolchain({ ...base, language: "python", toolchains: NEITHER })).toEqual({ jdk: 0, bash: 0 });
   });
 
   it("ignores other axes", () => {
-    expect(hiddenByToolchain({ ...base, axis: "debugging", toolchains: NO_JDK })).toBe(0);
+    expect(hiddenByToolchain({ ...base, axis: "debugging", toolchains: NEITHER })).toEqual({ jdk: 0, bash: 0 });
+  });
+
+  it("counts shell writes under bash, and the in-process shell kinds not at all", () => {
+    const pool = {
+      statics: [shellWriteEx("sr-sh-001"), shellRecallEx("sr-sh-950"), clozeEx("sr-sh-951", "syntax-recall", "shell")],
+      generators: [shellWriteGen("sr-sh-count")],
+      axis: "syntax-recall" as const,
+    };
+    expect(hiddenByToolchain({ ...pool, toolchains: NO_BASH })).toEqual({ jdk: 0, bash: 2 }); // the write + the family
+    expect(hiddenByToolchain({ ...pool, toolchains: ALL })).toEqual({ jdk: 0, bash: 0 });
+  });
+
+  const twoToolchainPool = {
+    statics: [
+      ex("sr-java-001", 1, "java"),
+      ex("sr-java-002", 1, "java"),
+      shellWriteEx("sr-sh-001"),
+      shellRecallEx("sr-sh-950"),
+      ex("sr-py-001", 1),
+    ],
+    generators: [fakeGen("sr-java-cond", [1], "java"), shellWriteGen("sr-sh-count")],
+    axis: "syntax-recall" as const,
+  };
+
+  it("puts every hidden drill in exactly one bucket when both toolchains are missing", () => {
+    // Seven candidates on the axis; the python write and the shell recall survive, so
+    // five vanish: three java (two writes + the family) and two shell (write + family).
+    const hidden = hiddenByToolchain({ ...twoToolchainPool, toolchains: NEITHER });
+    expect(hidden).toEqual({ jdk: 3, bash: 2 });
+    // The anti-double-count law, stated as an identity: what the two toolchains hide
+    // together is exactly what each hides alone - nothing is billed to both.
+    const jdkOnly = hiddenByToolchain({ ...twoToolchainPool, toolchains: NO_JDK });
+    const bashOnly = hiddenByToolchain({ ...twoToolchainPool, toolchains: NO_BASH });
+    expect(hidden.jdk + hidden.bash).toBe(jdkOnly.jdk + bashOnly.bash);
+    expect(jdkOnly).toEqual({ jdk: 3, bash: 0 });
+    expect(bashOnly).toEqual({ jdk: 0, bash: 2 });
+  });
+
+  it("counts only what the requested language could have been offered", () => {
+    expect(hiddenByToolchain({ ...twoToolchainPool, language: "shell", toolchains: NEITHER })).toEqual({
+      jdk: 0,
+      bash: 2,
+    });
+    expect(hiddenByToolchain({ ...twoToolchainPool, language: "java", toolchains: NEITHER })).toEqual({
+      jdk: 3,
+      bash: 0,
+    });
   });
 });
 
@@ -494,9 +655,9 @@ describe("availableAxes", () => {
   it("filters axes by language, counting language-any exercises for every filter", () => {
     // Toolchains are explicit here and below: the real probe would make these assertions
     // depend on whether the machine running the suite happens to have a JDK.
-    expect(availableAxes(bank, "java", [], JDK)).toEqual(["syntax-recall", "api-memory", "decomposition"]);
-    expect(availableAxes(bank, "python", [], JDK)).toEqual(["code-reading", "decomposition"]);
-    expect(availableAxes(bank, undefined, [], JDK)).toEqual(["syntax-recall", "code-reading", "api-memory", "decomposition"]);
+    expect(availableAxes(bank, "java", [], ALL)).toEqual(["syntax-recall", "api-memory", "decomposition"]);
+    expect(availableAxes(bank, "python", [], ALL)).toEqual(["code-reading", "decomposition"]);
+    expect(availableAxes(bank, undefined, [], ALL)).toEqual(["syntax-recall", "code-reading", "api-memory", "decomposition"]);
   });
 
   it("hides only the axes whose java content needs a JVM", () => {
@@ -519,15 +680,15 @@ describe("availableAxes with generators", () => {
   };
 
   it("includes an axis whose only content for the language is a generator family", () => {
-    expect(availableAxes([], "java", [javaGen], JDK)).toEqual(["syntax-recall"]);
+    expect(availableAxes([], "java", [javaGen], ALL)).toEqual(["syntax-recall"]);
   });
 
   it("still excludes axes with no static or generator content", () => {
-    expect(availableAxes([], "java", [], JDK)).toEqual([]);
+    expect(availableAxes([], "java", [], ALL)).toEqual([]);
   });
 
   it("does not add axes for a non-matching language filter", () => {
-    expect(availableAxes([], "python", [javaGen], JDK)).toEqual([]);
+    expect(availableAxes([], "python", [javaGen], ALL)).toEqual([]);
   });
 
   it("drops an axis whose only java family is JVM-graded when the host has no JDK", () => {
@@ -538,11 +699,26 @@ describe("availableAxes with generators", () => {
   });
 
   it("counts a language-any family for every language, java included", () => {
-    expect(availableAxes([], "python", [anyGen], JDK)).toEqual(["decomposition"]);
-    expect(availableAxes([], "java", [anyGen], JDK)).toEqual(["decomposition"]);
-    expect(availableAxes([], undefined, [anyGen], JDK)).toEqual(["decomposition"]);
+    expect(availableAxes([], "python", [anyGen], ALL)).toEqual(["decomposition"]);
+    expect(availableAxes([], "java", [anyGen], ALL)).toEqual(["decomposition"]);
+    expect(availableAxes([], undefined, [anyGen], ALL)).toEqual(["decomposition"]);
     // Not java content, so no JDK is no reason to hide it.
     expect(availableAxes([], "java", [anyGen], NO_JDK)).toEqual(["decomposition"]);
+  });
+});
+
+describe("availableAxes - bash", () => {
+  const bank = [shellWriteEx("sr-sh-001", "syntax-recall"), shellRecallEx("api-sh-950", "api-memory")];
+
+  it("drops an axis whose only shell content is a write when the host has no bash", () => {
+    expect(availableAxes(bank, "shell", [], ALL)).toEqual(["syntax-recall", "api-memory"]);
+    // syntax-recall goes (a script has to run), api-memory stays (a recall is typed).
+    expect(availableAxes(bank, "shell", [], NO_BASH)).toEqual(["api-memory"]);
+  });
+
+  it("drops a shell write family the same way", () => {
+    expect(availableAxes([], "shell", [shellWriteGen("sr-sh-count")], ALL)).toEqual(["syntax-recall"]);
+    expect(availableAxes([], "shell", [shellWriteGen("sr-sh-count")], NO_BASH)).toEqual([]);
   });
 });
 
@@ -561,7 +737,7 @@ describe("selectExercise - allowedLanguages", () => {
     testTimeoutMs: 10_000,
     acceptedAnswers: ["a"],
   };
-  const pool = { statics: [javaEx, pyEx, anyRecall], axis: "syntax-recall" as const, rating: 1150, toolchains: JDK };
+  const pool = { statics: [javaEx, pyEx, anyRecall], axis: "syntax-recall" as const, rating: 1150, toolchains: ALL };
 
   it("allowlist filters candidates but 'any' always passes", () => {
     const rng = mulberry32(11);
@@ -589,13 +765,13 @@ describe("availableAxes - allowedLanguages", () => {
   const bank = [javaWrite, pyReading];
 
   it("availableAxes narrows under the allowlist", () => {
-    expect(availableAxes(bank, undefined, [], JDK)).toEqual(["syntax-recall", "code-reading"]);
+    expect(availableAxes(bank, undefined, [], ALL)).toEqual(["syntax-recall", "code-reading"]);
     // code-reading's only drill is python: it vanishes under a java-only allowlist.
-    expect(availableAxes(bank, undefined, [], JDK, ["java"])).toEqual(["syntax-recall"]);
+    expect(availableAxes(bank, undefined, [], ALL, ["java"])).toEqual(["syntax-recall"]);
   });
 
   it("an explicit language ignores the allowlist entirely", () => {
-    expect(availableAxes(bank, "python", [], JDK, ["java"])).toEqual(["code-reading"]);
+    expect(availableAxes(bank, "python", [], ALL, ["java"])).toEqual(["code-reading"]);
   });
 });
 
@@ -622,7 +798,34 @@ describe("hiddenByLanguages", () => {
     const javaGen = fakeGen("sr-java-cond", [1], "java");
     const pyGen = fakeGen("sr-py-cond", [1]);
     expect(
-      hiddenByLanguages({ statics: [], generators: [javaGen, pyGen], axis: "syntax-recall", toolchains: JDK }, ["java"]),
+      hiddenByLanguages({ statics: [], generators: [javaGen, pyGen], axis: "syntax-recall", toolchains: ALL }, ["java"]),
     ).toBe(1);
+  });
+
+  it("a bash-hidden shell write is not also counted as allowlist-hidden", () => {
+    // The same law with the second toolchain: the shell write is gone from both arms
+    // already, so only the python write - which the allowlist really does exclude -
+    // counts here, and the shell write is reported by `hiddenByToolchain` instead.
+    const pool = { statics: [shellWriteEx("sr-sh-001"), pyWrite], axis: "syntax-recall" as const, toolchains: NO_BASH };
+    expect(hiddenByLanguages(pool, ["shell"])).toBe(1);
+    expect(hiddenByToolchain(pool)).toEqual({ jdk: 0, bash: 1 });
+  });
+
+  it("under EVERY_TOOLCHAIN it answers the other question instead", () => {
+    // Same pool, same allowlist, two different questions. On the real (bash-less)
+    // toolchains the shell write is billed to bash and this reads 0 - the right answer
+    // to "what did this host lose to the allowlist". A fully equipped host is asked the
+    // other one, "would clearing the allowlist ever put a drill back", and that is the
+    // one the CLI's empty-pool report needs before it tells anyone to install bash.
+    const pool = { statics: [shellWriteEx("sr-sh-001")], axis: "syntax-recall" as const, toolchains: NO_BASH };
+    expect(hiddenByLanguages(pool, ["python"])).toBe(0);
+    expect(hiddenByLanguages({ ...pool, toolchains: EVERY_TOOLCHAIN }, ["python"])).toBe(1);
+  });
+});
+
+describe("EVERY_TOOLCHAIN", () => {
+  it("is every toolchain, and immutable", () => {
+    expect(EVERY_TOOLCHAIN).toEqual(ALL);
+    expect(Object.isFrozen(EVERY_TOOLCHAIN)).toBe(true);
   });
 });

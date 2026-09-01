@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { BankError, exerciseSchema, isHarness, isSqlWrite, JVM_KINDS, loadBank, loadBankDetailed, parseExercise, totalUnits, type CodeExercise, type HarnessExercise, type RecallExercise } from "./schema.js";
+import { BankError, exerciseSchema, isHarness, isShellWrite, isSqlWrite, JVM_KINDS, LANGUAGES, loadBank, loadBankDetailed, parseExercise, spawnsShell, totalUnits, type CodeExercise, type HarnessExercise, type RecallExercise } from "./schema.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 
@@ -139,7 +139,7 @@ describe("recall kind", () => {
   it("takes a concrete language as well as \"any\", and still nothing else", () => {
     // A drill about JVM flags or SQL window functions is not language-agnostic just
     // because answering it runs no toolchain; "any" stays the tag for the ones that are.
-    for (const language of ["java", "sql", "python", "javascript", "any"]) {
+    for (const language of ["java", "sql", "shell", "python", "javascript", "any"]) {
       const parsed = parseExercise(JSON.stringify({ ...recall, language })) as RecallExercise;
       expect(parsed.language).toBe(language);
     }
@@ -217,8 +217,16 @@ describe("sql write shape", () => {
     expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "sql", starterCode: "-- q", cases: sqlCases, tests: [{ args: [], expected: 1 }] })).toThrow();
   });
   it("rejects sql write with < 2 cases or all-identical expectedRows", () => {
-    expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "sql", starterCode: "-- q", cases: [sqlCases[0]] })).toThrow();
-    expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "sql", starterCode: "-- q", cases: [sqlCases[0], sqlCases[0]] })).toThrow();
+    // A bare .toThrow() is not evidence for `.min(2)`: the refinement below fires on a
+    // one-element array too (one distinct row set < 2), so the assertion would stay green
+    // with the arity rule deleted. Pin zod's own arity issue instead.
+    const one = exerciseSchema.safeParse({ ...base, kind: "write", language: "sql", starterCode: "-- q", cases: [sqlCases[0]] });
+    if (one.success) throw new Error("a one-case sql write must not parse");
+    expect(one.error.issues).toContainEqual(
+      expect.objectContaining({ code: "too_small", minimum: 2, path: ["cases"] }),
+    );
+    expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "sql", starterCode: "-- q", cases: [sqlCases[0], sqlCases[0]] }))
+      .toThrow(/must expect different rows/);
   });
   it("rejects non-sql write with cases/ordered, and keeps today's contract intact", () => {
     expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "python", functionName: "f", starterCode: "def f(): pass", tests: [{ args: [], expected: 1 }], cases: sqlCases })).toThrow();
@@ -255,6 +263,161 @@ describe("sql write shape", () => {
   });
   it("exports JVM_KINDS as the four java-graded kinds", () => {
     expect([...JVM_KINDS]).toEqual(["write", "fix", "write-harness", "fix-harness"]);
+  });
+});
+
+const shellBase = {
+  id: "sr-sh-901", axis: "syntax-recall", tier: 1, title: "t", prompt: "p",
+  softTimeLimitSeconds: 60,
+};
+const shellCases = [
+  { files: { "log.txt": "ok\nerr\nok\n" }, args: ["ok"], expectedStdout: "2\n" },
+  { files: { "log.txt": "err\n" }, args: ["ok"], expectedStdout: "0\n", expectedExitCode: 1 },
+];
+/** A shell write with `over` merged in; `shellCases` is the discriminating pair above. */
+const shellWrite = (over: Record<string, unknown> = {}) => ({
+  ...shellBase, kind: "write", language: "shell",
+  starterCode: "#!/usr/bin/env bash\n", shellCases, ...over,
+});
+
+describe("shell write shape", () => {
+  it("accepts a well-formed shell write (shellCases, no tests/functionName)", () => {
+    const ex = exerciseSchema.parse(shellWrite());
+    expect(isShellWrite(ex)).toBe(true);
+    expect(totalUnits(ex)).toBe(2);
+  });
+
+  it("carries files, args and both expectations through parsing", () => {
+    // z.object strips unknown keys, so reading them back is what proves the shellCase
+    // fields are in the schema at all. expectedExitCode is optional (absent means 0).
+    const ex = exerciseSchema.parse(shellWrite());
+    if (!isShellWrite(ex)) throw new Error("fixture is not a shell write");
+    expect(ex.shellCases[0]).toEqual({ files: { "log.txt": "ok\nerr\nok\n" }, args: ["ok"], expectedStdout: "2\n" });
+    expect(ex.shellCases[1]!.expectedExitCode).toBe(1);
+  });
+
+  it("rejects a shell write carrying tests, functionName, or the sql fields", () => {
+    expect(() => exerciseSchema.parse(shellWrite({ tests: [{ args: [], expected: 1 }] }))).toThrow(/no hidden tests/);
+    expect(() => exerciseSchema.parse(shellWrite({ functionName: "f" }))).toThrow(/no function to call/);
+    expect(() => exerciseSchema.parse(shellWrite({ cases: sqlCases }))).toThrow(/cases is sql-only/);
+    expect(() => exerciseSchema.parse(shellWrite({ ordered: true }))).toThrow(/ordered is sql-only/);
+  });
+
+  it("requires shellCases, and at least two of them", () => {
+    // The exact string, not /shellCases/: that would also match "shellCases is shell-only",
+    // the rule for the opposite mistake.
+    expect(() => exerciseSchema.parse(shellWrite({ shellCases: undefined })))
+      .toThrow("shell exercises are graded by shellCases, which is required");
+    // A bare .toThrow() is not evidence for `.min(2)`: the discrimination rule below fires
+    // on a one-element array too (one distinct expectation < 2), so the assertion would
+    // stay green with the arity rule deleted. Pin zod's own arity issue instead.
+    const one = exerciseSchema.safeParse(shellWrite({ shellCases: [shellCases[0]] }));
+    if (one.success) throw new Error("a one-case shell write must not parse");
+    expect(one.error.issues).toContainEqual(
+      expect.objectContaining({ code: "too_small", minimum: 2, path: ["shellCases"] }),
+    );
+  });
+
+  it("rejects shell cases whose expectations do not discriminate", () => {
+    // Same stdout and same exit status twice is one case: `echo` of a literal passes both.
+    expect(() => exerciseSchema.parse(shellWrite({ shellCases: [shellCases[0], shellCases[0]] })))
+      .toThrow(/must differ in expected stdout or exit code/);
+    // Differing only in files/args is not a discriminating pair either.
+    expect(() => exerciseSchema.parse(shellWrite({
+      shellCases: [shellCases[0], { ...shellCases[0], files: { "log.txt": "ok\nok\n" }, args: ["nope"] }],
+    }))).toThrow(/must differ in expected stdout or exit code/);
+    // An explicit 0 and an absent exitCode are the same expectation - the default is 0.
+    expect(() => exerciseSchema.parse(shellWrite({
+      shellCases: [shellCases[0], { ...shellCases[0], expectedExitCode: 0 }],
+    }))).toThrow(/must differ in expected stdout or exit code/);
+  });
+
+  it("rejects an unusable files key, naming the rule that rejected it", () => {
+    // Read the issue rather than the thrown ZodError's message: the latter is a JSON dump
+    // in which every quote inside a message is backslash-escaped, so a regex written the
+    // way the rule reads would never match.
+    const rejection = (key: string): string => {
+      const parsed = exerciseSchema.safeParse(
+        shellWrite({ shellCases: [{ ...shellCases[0], files: { [key]: "x" } }, shellCases[1]] }),
+      );
+      if (parsed.success) throw new Error(`files key ${JSON.stringify(key)} must not parse`);
+      return parsed.error.issues.map((i) => i.message).join("; ");
+    };
+    // Each key is paired with the rule it must trip: one shared "bad path" message would
+    // tell an author who wrote "logs/" about drive letters they never used.
+    const rejected: [key: string, message: RegExp][] = [
+      ["", /must not be empty/],
+      ["/etc/passwd", /must be relative, not rooted at \//],
+      // Forward slashes, so the backslash rule below does not shadow the drive-letter one.
+      ["C:/tmp/x", /must be relative, not a drive-letter path/],
+      ["C:\\tmp\\x", /must use "\/" as its path separator/],
+      // A backslash never reaches the segment rules: path.join splits on it only on
+      // win32, so "logs\app.log" would stage a nested file on Windows and one
+      // oddly-named file on Linux - the same drill against two different trees.
+      ["logs\\app.log", /must use "\/" as its path separator/],
+      ["\\\\host\\share\\x", /must use "\/" as its path separator/],
+      ["../outside.txt", /must not contain a "\.\." segment/],
+      ["a/../../b.txt", /must not contain a "\.\." segment/],
+      [".", /must not contain a "\." segment/],
+      ["a/./b.txt", /must not contain a "\." segment/],
+      ["logs/", /must not have an empty path segment/],
+      ["a//b.txt", /must not have an empty path segment/],
+      // The stager writes files first, then copies the script over them, so this fixture
+      // would vanish silently. Case-insensitive, because a Windows filesystem is.
+      ["solution.sh", /collides with the staged solution file/],
+      ["Solution.SH", /collides with the staged solution file/],
+    ];
+    for (const [key, message] of rejected) {
+      expect(rejection(key), `files key ${JSON.stringify(key)}`).toMatch(message);
+      // The key itself is always named, so the author knows which entry to fix.
+      expect(rejection(key), `files key ${JSON.stringify(key)}`).toContain(`files key "${key}"`);
+    }
+  });
+
+  it("accepts the relative keys a fixture actually needs", () => {
+    // Nested paths are valid - the stager creates parent directories - and a name that
+    // merely contains the solution file's name is not the collision.
+    for (const key of ["log.txt", "logs/app.log", "a/b/c/deep.txt", "my-solution.sh", "logs/solution.sh"]) {
+      const ex = exerciseSchema.parse(shellWrite({
+        shellCases: [{ ...shellCases[0], files: { [key]: "x" } }, shellCases[1]],
+      }));
+      expect(isShellWrite(ex), `files key ${JSON.stringify(key)} must parse`).toBe(true);
+    }
+  });
+
+  it("rejects shellCases off shell", () => {
+    expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "python", functionName: "f", starterCode: "def f(): pass", tests: [{ args: [], expected: 1 }], shellCases })).toThrow(/shellCases is shell-only/);
+    expect(() => exerciseSchema.parse({ ...base, kind: "write", language: "sql", starterCode: "-- q", cases: sqlCases, shellCases })).toThrow(/shellCases is shell-only/);
+  });
+
+  it("rejects shell on fix and predict-output, naming the kinds that do ship shell", () => {
+    // Pinned to the rule's own message, same reason as the sql twin: the fix fixture is
+    // invalid several ways over, so a bare .toThrow() would stay green with the rule gone.
+    expect(() => exerciseSchema.parse(shellWrite({ kind: "fix", axis: "debugging" }))).toThrow(/shell ships no fix or predict-output/);
+    expect(() => exerciseSchema.parse({ ...shellBase, kind: "predict-output", language: "shell", snippet: "echo hi" })).toThrow(/shell ships no fix or predict-output/);
+  });
+
+  it("accepts shell on cloze, which the rejection message above promises", () => {
+    // The recall half is pinned by the recall suite's language loop; this is the cloze
+    // half, so the promise cannot quietly become a lie. Neither kind runs anything.
+    const ex = exerciseSchema.parse({
+      ...shellBase, id: "api-sh-901", axis: "api-memory", kind: "cloze", language: "shell",
+      snippet: "grep -c ____ log.txt", acceptedAnswers: ["ok"],
+    });
+    expect(ex.language).toBe("shell");
+  });
+
+  it("spawnsShell is write-only, unlike spawnsJvm", () => {
+    // Only a shell write runs the user's script; a shell cloze/recall matches in-process,
+    // and the refinement above rejects every other shell kind by name.
+    expect(spawnsShell("write")).toBe(true);
+    for (const kind of ["fix", "write-harness", "fix-harness", "predict-output", "cloze", "outline", "recall"] as const) {
+      expect(spawnsShell(kind), `spawnsShell(${kind})`).toBe(false);
+    }
+  });
+
+  it("appends shell to LANGUAGES so the setup menu numbering stays stable", () => {
+    expect([...LANGUAGES]).toEqual(["python", "javascript", "java", "sql", "shell"]);
   });
 });
 
