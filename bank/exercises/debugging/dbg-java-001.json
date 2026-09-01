@@ -1,0 +1,21 @@
+{
+  "id": "dbg-java-001",
+  "kind": "fix",
+  "axis": "debugging",
+  "language": "java",
+  "tier": 1,
+  "title": "Binary search misses the last window",
+  "prompt": "indexOf(int[] sorted, int target) must return the index of target in the ascending array, or -1 if absent. One of these tests fails. Find the bug and fix it without rewriting the algorithm.",
+  "functionName": "indexOf",
+  "starterCode": "public class Solution {\n    static int indexOf(int[] sorted, int target) {\n        int lo = 0, hi = sorted.length - 1;\n        while (lo < hi) {\n            int mid = (lo + hi) >>> 1;\n            if (sorted[mid] == target) return mid;\n            if (sorted[mid] < target) lo = mid + 1;\n            else hi = mid - 1;\n        }\n        return -1;\n    }\n}\n",
+  "softTimeLimitSeconds": 300,
+  "testTimeoutMs": 20000,
+  "tests": [
+    { "args": [[1, 3, 5, 7], 5], "expected": 2 },
+    { "args": [[4], 4], "expected": 0 },
+    { "args": [[1, 3, 5, 7], 7], "expected": 3 },
+    { "args": [[1, 3], 3], "expected": 1 },
+    { "args": [[1, 3, 5], 2], "expected": -1 },
+    { "args": [[], 9], "expected": -1 }
+  ]
+}

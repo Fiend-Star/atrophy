@@ -1,0 +1,12 @@
+{
+  "id": "api-py-005",
+  "kind": "recall",
+  "axis": "api-memory",
+  "language": "python",
+  "tier": 2,
+  "title": "The default argument that remembers",
+  "prompt": "Python 3.\n\n    def collect(item, bucket=[]):\n        bucket.append(item)\n        return len(bucket)\n\nThe module calls collect(\"a\"), then collect(\"b\"), then collect(\"c\") - each with no second argument.\n\nWhat does the THIRD call return?\n\nType the number only.",
+  "softTimeLimitSeconds": 180,
+  "acceptedAnswers": ["3"],
+  "reveal": "3, not 1.\n\nThe default expression [] is evaluated ONCE, when the def statement runs - not on each call. That one list is stored on the function object (collect.__defaults__) and every call that omits the argument appends to it, so the three calls return 1, 2 and 3.\n\nThe fix is the None sentinel:\n\n    def collect(item, bucket=None):\n        if bucket is None:\n            bucket = []\n        bucket.append(item)\n        return len(bucket)\n\nSame trap for {} and set(), and for any default that captures state: datetime.now() as a default freezes the import-time clock into every call. It is a consequence of Python's evaluate-once rule, so it does not carry over blindly - JavaScript re-evaluates a default parameter on every call, and Java has no default arguments at all."
+}

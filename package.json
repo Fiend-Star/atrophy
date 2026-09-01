@@ -10,7 +10,8 @@
     "dist",
     "bank/exercises",
     "dashboard/index.html",
-    "docs/research.md"
+    "docs/research.md",
+    "engine/java"
   ],
   "engines": {
     "node": ">=22"

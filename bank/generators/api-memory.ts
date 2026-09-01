@@ -26,10 +26,22 @@ const WORD_POOLS = [
 
 const NAME_POOLS = ["items", "values", "entries", "records", "nums"] as const;
 
+/** Java collection identifiers - plural, and never a java keyword. */
+const JAVA_NAME_POOLS = ["names", "words", "tags", "labels"] as const;
+
+/** Sampled when a java snippet needs small, distinct numbers. */
+const DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
+
 function numList(rng: Rng, n: number, min = -9, max = 99): number[] {
   const out: number[] = [];
   for (let i = 0; i < n; i++) out.push(min + Math.floor(rng() * (max - min + 1)));
   return out;
+}
+
+/** `"a", "b", "c"` - the element list of a java String literal sequence. */
+function javaStrings(words: readonly string[]): string {
+  // The word pools are plain ASCII, where JSON and java string escaping agree.
+  return words.map((w) => JSON.stringify(w)).join(", ");
 }
 
 const PY_FACTS: ClozeFact[] = [
@@ -241,11 +253,132 @@ const JS_FACTS: ClozeFact[] = [
   },
 ];
 
-function makeClozeGenerator(family: string, language: "python" | "javascript", facts: ClozeFact[]): ExerciseGenerator {
+/**
+ * Java facts. Nothing here is compiled or run - cloze grading is exact-match on the
+ * typed answer - so each prompt has to pin the intent tightly enough that only the
+ * accepted forms fit, and `accepted` has to list every form the prompt admits
+ * (a false "wrong" costs the user rating). The line drawn across this table: a
+ * documented equivalence is accepted (Deque.push is specified as "equivalent to
+ * addFirst"), a different method that merely coincides in effect is not
+ * (offerFirst is the capacity-restricted insertion contract; Arrays.parallelSort
+ * is a different execution contract) - those the prompt wording excludes.
+ */
+const JAVA_FACTS: ClozeFact[] = [
+  {
+    tier: 1,
+    // Deliberately not the getOrDefault fact: static api-java-001 already teaches that
+    // one at this tier with this identifier scheme, and selection treats a static and a
+    // family as different families, so the pair could serve back-to-back. This is the
+    // other side of api-java-001's own prompt ("unlike computeIfAbsent, stores nothing").
+    title: "One list per key",
+    prompt:
+      "Fill the blank: the Map method that computes and stores the mapping on a key's first access and returns the existing one thereafter, so the .add() below always lands in a list the map is holding.",
+    accepted: ["computeIfAbsent"],
+    render: (rng) => {
+      const item = pick(rng, ["tag", "label", "user"]);
+      const map = `by${item[0]!.toUpperCase()}${item.slice(1)}`;
+      return `Map<String, List<Integer>> ${map} = new HashMap<>();\nfor (int i = 0; i < ${item}s.length; i++) {\n    ${map}.____(${item}s[i], k -> new ArrayList<>()).add(scores[i]);\n}`;
+    },
+  },
+  {
+    tier: 1,
+    title: "Sort ascending, in place",
+    prompt: "Fill the blank: the Collections method that reorders the list in place into ascending natural order.",
+    accepted: ["sort"],
+    render: (rng) => {
+      const name = pick(rng, JAVA_NAME_POOLS);
+      const words = sample(rng, pick(rng, WORD_POOLS), 3);
+      return `List<String> ${name} = new ArrayList<>(List.of(${javaStrings(words)}));\nCollections.____(${name});`;
+    },
+  },
+  {
+    tier: 1,
+    title: "Glue the parts",
+    prompt:
+      "Fill the blank: the String static method that concatenates the parts into one string with a separator between them.",
+    accepted: ["join"],
+    render: (rng) => {
+      const words = sample(rng, pick(rng, WORD_POOLS), 3);
+      const sep = pick(rng, [", ", "-", " | "]);
+      return `List<String> parts = List.of(${javaStrings(words)});\nString line = String.____(${JSON.stringify(sep)}, parts);`;
+    },
+  },
+  {
+    tier: 1,
+    title: "Deque as a stack",
+    prompt:
+      "Fill the blank: this Deque is used as a stack - put n on the top with the void insert (not the boolean offer form), so the pop() below takes the value pushed last.",
+    accepted: ["push", "addFirst"],
+    render: (rng) => {
+      // Distinct values: the `// top` comment is the hint that pop() returns the value
+      // pushed last, and a repeat would let it read as "the largest" instead.
+      const nums = sample(rng, DIGITS, 4);
+      const last = nums[nums.length - 1]!;
+      return `Deque<Integer> stack = new ArrayDeque<>();\nfor (int n : new int[] {${nums.join(", ")}}) {\n    stack.____(n);\n}\nint top = stack.pop();  // ${last}`;
+    },
+  },
+  {
+    tier: 2,
+    title: "Transform every element",
+    prompt: "Fill the blank: the Stream method that turns each element into a new value, one out for every one in.",
+    accepted: ["map"],
+    render: (rng) => {
+      const name = pick(rng, ["nums", "values", "amounts"]);
+      return `List<Integer> ${name} = List.of(${numList(rng, 4, 1, 20).join(", ")});\nList<Integer> doubled = ${name}.stream().____(n -> n * 2).toList();`;
+    },
+  },
+  {
+    tier: 2,
+    title: "Count the evens",
+    prompt:
+      "Fill the blank: the Stream method that keeps only the elements passing the test, so count() sees every even value in the list.",
+    accepted: ["filter"],
+    render: (rng) => {
+      const name = pick(rng, ["nums", "values", "readings"]);
+      return `List<Integer> ${name} = List.of(${numList(rng, 5, 1, 40).join(", ")});\nlong evens = ${name}.stream().____(n -> n % 2 == 0).count();`;
+    },
+  },
+  {
+    tier: 2,
+    title: "Tally in one call",
+    prompt:
+      "Fill the blank: the Map method that stores 1 on a key's first sighting and otherwise combines the stored value with 1 through Integer::sum - one call, no get and no null check.",
+    accepted: ["merge"],
+    render: (rng) => {
+      const item = pick(rng, ["tag", "event", "word"]);
+      return `Map<String, Integer> freq = new HashMap<>();\nfor (String ${item} : ${item}s) {\n    freq.____(${item}, 1, Integer::sum);\n}`;
+    },
+  },
+  {
+    tier: 2,
+    title: "Sort rows by first column",
+    prompt:
+      "Fill the blank: the Arrays method that reorders rows in place, sequentially, using the comparator it is handed.",
+    accepted: ["sort"],
+    render: (rng) => {
+      // Distinct keys, never already ascending: the sort has to visibly do something.
+      const keys = sample(rng, DIGITS, 3);
+      const rest = numList(rng, 3, 1, 9);
+      if (keys[0]! < keys[1]! && keys[1]! < keys[2]!) keys.reverse();
+      const rows = keys.map((k, i) => `{${k}, ${rest[i]}}`).join(", ");
+      // Integer.compare, never `a[0] - b[0]`: the subtraction form overflows on wide
+      // ints, and static api-java-004 teaches the correct ordering for these same
+      // int[] rows. Ambient code in a drill is still code the user reads as approved.
+      return `int[][] rows = {${rows}};\nArrays.____(rows, (a, b) -> Integer.compare(a[0], b[0]));`;
+    },
+  },
+];
+
+function makeClozeGenerator(
+  family: string,
+  language: "python" | "javascript" | "java",
+  facts: ClozeFact[],
+): ExerciseGenerator {
   const tiers = [...new Set(facts.map((f) => f.tier))].sort();
   return {
     family,
     axis: "api-memory",
+    kind: "cloze",
     language,
     tiers,
     generate(seed, tier) {
@@ -272,4 +405,5 @@ function makeClozeGenerator(family: string, language: "python" | "javascript", f
 export const apiMemoryGenerators: ExerciseGenerator[] = [
   makeClozeGenerator("api-py-gen", "python", PY_FACTS),
   makeClozeGenerator("api-js-gen", "javascript", JS_FACTS),
+  makeClozeGenerator("api-java-blank", "java", JAVA_FACTS),
 ];

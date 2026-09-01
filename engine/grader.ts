@@ -1,17 +1,31 @@
-import { writeFileSync } from "node:fs";
+import { copyFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
+import { isHarness, isSqlWrite } from "../bank/schema.js";
 import type {
-  ClozeExercise,
-  CodeExercise,
+  CodeLikeExercise,
+  HarnessExercise,
   OutlineExercise,
   PredictExercise,
+  RecallExercise,
+  SqlWriteExercise,
+  TestedExercise,
 } from "../bank/schema.js";
-import { run } from "./runner.js";
+import {
+  JAVA_COMPILE_TIMEOUT_MS,
+  JAVA_RUNTIME_FLAGS,
+  javaCommand,
+  javacCommand,
+  javaResourceDir,
+  missingJdkHint,
+} from "./javatool.js";
+import { run, type RunResult } from "./runner.js";
 
 export interface TestFailure {
   index: number;
-  args: unknown[];
-  expected: unknown;
+  /** Absent for exercise-supplied harnesses: an Atrophy check is a named assertion, not a call. */
+  args?: unknown[];
+  expected?: unknown;
   actual?: unknown;
   error?: string;
 }
@@ -26,8 +40,10 @@ export interface GradeResult {
 
 const RESULT_MARKER = "ATROPHY_RESULT ";
 
-export function solutionFileName(ex: CodeExercise | OutlineExercise): string {
+export function solutionFileName(ex: CodeLikeExercise | OutlineExercise): string {
   if (ex.kind === "outline") return "outline.md";
+  if (ex.language === "java") return "Solution.java";
+  if (ex.language === "sql") return "solution.sql";
   return ex.language === "python" ? "solution.py" : "solution.js";
 }
 
@@ -36,7 +52,7 @@ export function pythonCommand(): string {
   return process.platform === "win32" ? "python" : "python3";
 }
 
-function pythonHarness(ex: CodeExercise): string {
+function pythonHarness(ex: TestedExercise): string {
   const tests = JSON.stringify(ex.tests);
   return `import importlib.util, json, sys, traceback
 
@@ -77,7 +93,7 @@ print("ATROPHY_RESULT " + json.dumps({"passed": passed, "total": len(tests),
 `;
 }
 
-function nodeHarness(ex: CodeExercise): string {
+function nodeHarness(ex: TestedExercise): string {
   const tests = JSON.stringify(ex.tests);
   return `const path = require("node:path");
 let fn;
@@ -121,10 +137,313 @@ emit({ passed, total, failures });
 }
 
 /**
+ * The result-set canonicalization the sql harness uses, kept as source text because
+ * that harness runs in a child process and cannot import the schema. On the unordered
+ * path it must agree byte-for-byte with `canonicalRows` in bank/schema.ts - that is the
+ * function deciding at parse time whether two cases are distinguishable, so a drift here
+ * would let an exercise ship whose cases the grader cannot actually tell apart.
+ * `grader.sql.test.ts` evaluates this string against it.
+ */
+export const SQL_CANON_SOURCE = `const canonicalRow = (row) => {
+  const sorted = {};
+  for (const key of Object.keys(row).sort()) sorted[key] = row[key];
+  return JSON.stringify(sorted);
+};
+const canonicalRows = (rows, ordered) => {
+  const canonical = rows.map(canonicalRow);
+  if (!ordered) canonical.sort();
+  return JSON.stringify(canonical);
+};`;
+
+/**
+ * sql write: run the user's query against every case's own fresh in-memory database
+ * and compare result sets. better-sqlite3 is a dependency of the CLI, not of the temp
+ * dir the child runs in, so the absolute resolved path is baked into the script.
+ */
+function sqlHarnessScript(ex: SqlWriteExercise, solutionFile: string): string {
+  const betterSqlitePath = createRequire(import.meta.url).resolve("better-sqlite3");
+  return `const path = require("node:path");
+const { readFileSync } = require("node:fs");
+let Database, sql;
+try {
+  Database = require(${JSON.stringify(betterSqlitePath)});
+  sql = readFileSync(path.join(__dirname, ${JSON.stringify(solutionFile)}), "utf8");
+} catch (err) {
+  // Deliberately no ATROPHY_RESULT line: a broken install is not evidence about the
+  // user, and parseMarker turns a marker-less run into a harnessError, not a 0/n.
+  console.error("sql harness could not start: " + String(err && err.message || err));
+  process.exit(1);
+}
+
+const cases = ${JSON.stringify(ex.cases)};
+const ordered = ${JSON.stringify(ex.ordered === true)};
+${SQL_CANON_SOURCE}
+const msg = (err) => String(err && err.message || err);
+const preview = (rows) => {
+  const s = JSON.stringify(rows);
+  return s.length > 300 ? s.slice(0, 300) + "..." : s;
+};
+
+// One case has three possible verdicts, and the third is the important one: the
+// exercise itself is broken ("bug"), which is not a score at all.
+const runCase = (c, i) => {
+  const db = new Database(":memory:");
+  try {
+    try {
+      db.exec(c.fixture);
+      // The fixture is bank-authored and has just run; everything after it is the
+      // user's answer, and an answer is a read. query_only turns a DELETE-then-SELECT
+      // "solution" into a named error instead of a pass.
+      db.pragma("query_only = 1");
+    } catch (err) {
+      // A fixture that will not build is nothing the user did.
+      return { bug: "case " + (i + 1) + " fixture failed: " + msg(err) };
+    }
+    try {
+      const rows = db.prepare(sql).all();
+      if (canonicalRows(rows, ordered) === canonicalRows(c.expectedRows, ordered)) return { ok: true };
+      return {
+        error: "case " + (i + 1) + ": wrong rows" +
+          "\\n  expected: " + preview(c.expectedRows) +
+          "\\n  got:      " + preview(rows),
+      };
+    } catch (err) {
+      // A syntax error, a multi-statement submission or a write attempt is a failed
+      // case, not a crash: the other cases still run and the user still gets a score.
+      return { error: "case " + (i + 1) + ": " + msg(err) };
+    }
+  } finally {
+    try { db.close(); } catch { /* the process is about to exit anyway */ }
+  }
+};
+
+let passed = 0;
+const failures = [];
+let bug = null;
+for (let i = 0; i < cases.length && bug === null; i++) {
+  const verdict = runCase(cases[i], i);
+  if (verdict.bug) bug = verdict.bug;
+  else if (verdict.ok) passed += 1;
+  else failures.push({ index: i, error: verdict.error });
+}
+
+const emit = (r) => console.log("ATROPHY_RESULT " + JSON.stringify(r));
+// A bank bug voids the whole attempt instead of reporting the cases that did grade:
+// \`passed\` is what reaches the rating, and "1/2, because case 2 is malformed" is
+// indistinguishable to the user from their own half-right answer.
+if (bug !== null) {
+  emit({
+    passed: 0,
+    total: cases.length,
+    failures: [],
+    harnessError: "exercise bug: " + bug + " - please report this exercise",
+  });
+} else {
+  emit({ passed, total: cases.length, failures });
+}
+`;
+}
+
+/** A sql write has no interpreter to find: SQLite is bundled, so this lane always runs. */
+async function gradeSql(ex: SqlWriteExercise, dir: string): Promise<GradeResult> {
+  const total = ex.cases.length;
+  const harnessName = "__atrophy_sql_harness__.cjs";
+  try {
+    writeFileSync(join(dir, harnessName), sqlHarnessScript(ex, solutionFileName(ex)), "utf8");
+  } catch (err) {
+    // resolve() of better-sqlite3 throws on a broken install, and the drill loop has
+    // no catch: report it the way gradeJavaTests reports a missing resource dir.
+    return {
+      passed: 0,
+      total,
+      failures: [],
+      harnessError: `could not stage the sql harness: ${(err as Error).message}`,
+    };
+  }
+  let result;
+  try {
+    result = await run(process.execPath, [harnessName], { cwd: dir, timeoutMs: ex.testTimeoutMs });
+  } catch (err) {
+    return {
+      passed: 0,
+      total,
+      failures: [],
+      harnessError: `could not start ${process.execPath}: ${(err as Error).message}`,
+    };
+  }
+  return parseMarker(result, total, ex.testTimeoutMs);
+}
+
+/**
+ * Turn a finished harness run into a GradeResult: the timeout wins, then the
+ * last ATROPHY_RESULT line, then whatever the process said before dying.
+ * Shared by every language path so they fail the same way.
+ */
+function parseMarker(result: RunResult, total: number, timeoutMs: number): GradeResult {
+  if (result.timedOut) {
+    return {
+      passed: 0,
+      total,
+      failures: [],
+      harnessError: `tests timed out after ${timeoutMs} ms (infinite loop?)`,
+    };
+  }
+
+  const line = result.stdout
+    .split(/\r?\n/)
+    .reverse()
+    .find((l) => l.startsWith(RESULT_MARKER));
+  if (!line) {
+    const detail = (result.stderr || result.stdout).trim().slice(0, 2000);
+    return {
+      passed: 0,
+      total,
+      failures: [],
+      harnessError: detail || `harness produced no result (exit ${result.exitCode})`,
+    };
+  }
+  // The marker line is pack-authored on the testCode path, so it is untrusted input:
+  // an unterminated object (SyntaxError) or a bare `null` (which every downstream
+  // property read would throw on) must come back as a result, not as an exception
+  // thrown through grade() and out of the live drill loop.
+  const unparseable: GradeResult = {
+    passed: 0,
+    total,
+    failures: [],
+    harnessError: "harness printed an unparseable ATROPHY_RESULT line - please report this exercise",
+  };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line.slice(RESULT_MARKER.length));
+  } catch {
+    return unparseable;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return unparseable;
+  const graded = parsed as GradeResult;
+  // A hand-rolled harness may omit an empty failures list; printFailures indexes it,
+  // and reads .args off each element - a null entry would throw there, mid-drill.
+  return {
+    ...graded,
+    // `passed` becomes a score and a stored column, so it has to be a number on every
+    // language path, not just the harness one: an absent or non-numeric count reaching
+    // recordSession as undefined throws on the better-sqlite3 bind and loses a rep the
+    // user already earned. Non-finite is not evidence of anything - it scores 0.
+    passed: Number.isFinite(graded.passed) ? graded.passed : 0,
+    failures: Array.isArray(graded.failures)
+      ? graded.failures.filter((f) => f !== null && typeof f === "object")
+      : [],
+  };
+}
+
+/** javac + java with friendly errors; returns a GradeResult on failure, or the run result. */
+async function compileAndRunJava(
+  dir: string,
+  sources: string[],
+  mainClass: string,
+  total: number,
+  timeoutMs: number,
+): Promise<{ error: GradeResult } | { result: RunResult }> {
+  const fail = (harnessError: string) => ({ error: { passed: 0, total, failures: [], harnessError } });
+
+  let compile;
+  try {
+    // Compile gets its own budget: javac time is not the user's thinking time.
+    // -J pins javac's own JVM locale so diagnostics read the same on every host,
+    // the way JAVA_RUNTIME_FLAGS pins the graded run.
+    compile = await run(
+      javacCommand(),
+      ["-J-Duser.language=en", "-J-Duser.country=US", "-encoding", "UTF-8", ...sources],
+      { cwd: dir, timeoutMs: JAVA_COMPILE_TIMEOUT_MS },
+    );
+  } catch (err) {
+    return fail(`${missingJdkHint(javacCommand())} (${(err as Error).message})`);
+  }
+  if (compile.timedOut) return fail(`javac timed out after ${JAVA_COMPILE_TIMEOUT_MS} ms`);
+  if (compile.exitCode !== 0) {
+    const detail = (compile.stderr || compile.stdout).trim().slice(0, 2000);
+    return fail(`javac: ${detail || `exited ${compile.exitCode}`}`);
+  }
+
+  let result;
+  try {
+    result = await run(javaCommand(), [...JAVA_RUNTIME_FLAGS, mainClass], { cwd: dir, timeoutMs });
+  } catch (err) {
+    return fail(`${missingJdkHint(javaCommand())} (${(err as Error).message})`);
+  }
+  return { result };
+}
+
+/** Java write/fix: the shipped reflection harness reads tests.json and calls Solution. */
+async function gradeJavaTests(ex: TestedExercise, dir: string): Promise<GradeResult> {
+  const total = ex.tests.length;
+  try {
+    copyFileSync(join(javaResourceDir(), "Harness.java"), join(dir, "Harness.java"));
+    writeFileSync(
+      join(dir, "tests.json"),
+      JSON.stringify({ functionName: ex.functionName, tests: ex.tests }),
+      "utf8",
+    );
+  } catch (err) {
+    // javaResourceDir() throws on a broken install; the drill loop has no catch, so
+    // an escaping error would kill the session and the user's in-progress work.
+    return { passed: 0, total, failures: [], harnessError: `could not stage the Java harness: ${(err as Error).message}` };
+  }
+  const outcome = await compileAndRunJava(dir, ["Solution.java", "Harness.java"], "Harness", total, ex.testTimeoutMs);
+  if ("error" in outcome) return outcome.error;
+  return parseMarker(outcome.result, total, ex.testTimeoutMs);
+}
+
+/**
+ * Java behavioral drills: the exercise ships its own `public class Harness`, compiled
+ * alongside the solution and the Atrophy helper. The harness owns what "passing" means
+ * (races, deadlocks, invariants), so the only thing we police is that it graded the
+ * number of checks the exercise declared.
+ */
+async function gradeHarness(ex: HarnessExercise, dir: string): Promise<GradeResult> {
+  const total = ex.totalChecks;
+  try {
+    writeFileSync(join(dir, "Harness.java"), ex.testCode, "utf8");
+    copyFileSync(join(javaResourceDir(), "Atrophy.java"), join(dir, "Atrophy.java"));
+  } catch (err) {
+    // Same contract as gradeJavaTests: the drill loop has no catch, so a broken
+    // install must come back as a result instead of ending the session.
+    return { passed: 0, total, failures: [], harnessError: `could not stage the Java harness: ${(err as Error).message}` };
+  }
+  const outcome = await compileAndRunJava(
+    dir,
+    ["Solution.java", "Harness.java", "Atrophy.java"],
+    "Harness",
+    total,
+    ex.testTimeoutMs,
+  );
+  if ("error" in outcome) return outcome.error;
+  const parsed = parseMarker(outcome.result, total, ex.testTimeoutMs);
+  if (!parsed.harnessError && parsed.total !== ex.totalChecks) {
+    return {
+      passed: 0,
+      total,
+      failures: [],
+      harnessError: `exercise bug: harness reported ${parsed.total} checks but the exercise declares ${ex.totalChecks} - please report this exercise`,
+    };
+  }
+  // Clamp what gets rendered and persisted: the count is pack-authored, and
+  // exerciseScore's clamp only protects the rating, not the stored row or "7/2 passed".
+  // Non-finite (absent, null, a string, NaN) scores 0 - it is not evidence of anything.
+  return {
+    ...parsed,
+    passed: Number.isFinite(parsed.passed) ? Math.min(Math.max(parsed.passed, 0), total) : 0,
+  };
+}
+
+/**
  * Grade the solution file sitting in `dir` against the exercise's hidden tests.
  * Writes the language harness next to it and runs it in a subprocess.
  */
-export async function grade(ex: CodeExercise, dir: string): Promise<GradeResult> {
+export async function grade(ex: CodeLikeExercise, dir: string): Promise<GradeResult> {
+  if (isHarness(ex)) return gradeHarness(ex, dir);
+  if (isSqlWrite(ex)) return gradeSql(ex, dir);
+  if (ex.language === "java") return gradeJavaTests(ex, dir);
+
   const isPy = ex.language === "python";
   const harnessName = isPy ? "__atrophy_harness__.py" : "__atrophy_harness__.cjs";
   writeFileSync(join(dir, harnessName), isPy ? pythonHarness(ex) : nodeHarness(ex), "utf8");
@@ -141,30 +460,7 @@ export async function grade(ex: CodeExercise, dir: string): Promise<GradeResult>
       harnessError: `could not start ${cmd}: ${(err as Error).message}`,
     };
   }
-
-  if (result.timedOut) {
-    return {
-      passed: 0,
-      total: ex.tests.length,
-      failures: [],
-      harnessError: `tests timed out after ${ex.testTimeoutMs} ms (infinite loop?)`,
-    };
-  }
-
-  const line = result.stdout
-    .split(/\r?\n/)
-    .reverse()
-    .find((l) => l.startsWith(RESULT_MARKER));
-  if (!line) {
-    const detail = (result.stderr || result.stdout).trim().slice(0, 2000);
-    return {
-      passed: 0,
-      total: ex.tests.length,
-      failures: [],
-      harnessError: detail || `harness produced no result (exit ${result.exitCode})`,
-    };
-  }
-  return JSON.parse(line.slice(RESULT_MARKER.length)) as GradeResult;
+  return parseMarker(result, ex.tests.length, ex.testTimeoutMs);
 }
 
 /** Canonicalize program output: CRLF→LF, strip per-line trailing space + outer blank lines. */
@@ -207,15 +503,25 @@ export async function gradePrediction(
   dir: string,
   prediction: string,
 ): Promise<PredictionResult> {
-  const isPy = ex.language === "python";
-  const file = isPy ? "snippet.py" : "snippet.js";
+  // Java runs through the single-file source launcher (`java Main.java`): it compiles
+  // in memory, so there is no javac step and no .class litter. One file only - that is
+  // the launcher's limit, and predict-output snippets are single-file by design.
+  const file = ex.language === "python" ? "snippet.py" : ex.language === "java" ? "Main.java" : "snippet.js";
   writeFileSync(join(dir, file), ex.snippet, "utf8");
-  const cmd = isPy ? pythonCommand() : process.execPath;
+  const cmd =
+    ex.language === "python" ? pythonCommand() : ex.language === "java" ? javaCommand() : process.execPath;
+  const cmdArgs = ex.language === "java" ? [...JAVA_RUNTIME_FLAGS, file] : [file];
   let result;
   try {
-    result = await run(cmd, [file], { cwd: dir, timeoutMs: ex.testTimeoutMs });
+    result = await run(cmd, cmdArgs, { cwd: dir, timeoutMs: ex.testTimeoutMs });
   } catch (err) {
-    return { correct: false, credit: 0, whitespaceOnly: false, error: `could not start ${cmd}: ${(err as Error).message}` };
+    // A missing JDK is an install problem, not a broken exercise: say how to fix it,
+    // the same way compileAndRunJava does on the write/fix path.
+    const detail =
+      ex.language === "java"
+        ? `${missingJdkHint(cmd)} (${(err as Error).message})`
+        : `could not start ${cmd}: ${(err as Error).message}`;
+    return { correct: false, credit: 0, whitespaceOnly: false, error: detail };
   }
   if (result.timedOut || result.exitCode !== 0) {
     const detail = result.timedOut ? "timed out" : result.stderr.trim().slice(0, 500);
@@ -239,12 +545,43 @@ export async function gradePrediction(
   return { correct: false, credit: 0, whitespaceOnly: false, actual };
 }
 
-/** Trim + collapse inner whitespace; cloze answers stay case-sensitive (API names are). */
-export function normalizeClozeAnswer(s: string): string {
-  return s.trim().replace(/\s+/g, " ");
+/**
+ * Numeric-tolerant recall normalization: "1/4", "0.25", "25%" all mean 0.25.
+ * A leading sign is optional everywhere a number can appear, exponents included -
+ * String(1e21) is "1e+21", so the + form is what a bank author pastes.
+ */
+export function normalizeRecallAnswer(s: string): { num?: number; text: string } {
+  const text = s.trim().toLowerCase().replace(/\s+/g, " ");
+  const compact = text.replace(/\s+/g, "");
+  // `num` means "the finite number this answer denotes". x/0 and overflow ("1e999")
+  // are deliberately left as text: Infinity makes the tolerance below Infinity too,
+  // which would accept every finite answer as a match.
+  const numeric = (num: number): { num?: number; text: string } =>
+    Number.isFinite(num) ? { num, text } : { text };
+
+  const pct = /^([+-]?(?:\d+\.?\d*|\.\d+))%$/.exec(compact);
+  if (pct) return numeric(Number.parseFloat(pct[1]!) / 100);
+  const frac = /^([+-]?(?:\d+\.?\d*|\.\d+))\/((?:\d+\.?\d*|\.\d+))$/.exec(compact);
+  if (frac) {
+    const denominator = Number.parseFloat(frac[2]!);
+    if (denominator !== 0) return numeric(Number.parseFloat(frac[1]!) / denominator);
+  }
+  if (/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/.test(compact)) {
+    return numeric(Number.parseFloat(compact));
+  }
+  return { text };
 }
 
-export function gradeCloze(ex: ClozeExercise, answer: string): boolean {
-  const norm = normalizeClozeAnswer(answer);
-  return ex.acceptedAnswers.some((a) => normalizeClozeAnswer(a) === norm);
+export function gradeRecall(ex: RecallExercise, answer: string): boolean {
+  const given = normalizeRecallAnswer(answer);
+  return ex.acceptedAnswers.some((accepted) => {
+    const want = normalizeRecallAnswer(accepted);
+    // An answer typed exactly as the bank wrote it is right whatever normalization
+    // makes of it - including the forms that carry no number at all ("1/0", "O(n)").
+    if (given.text === want.text) return true;
+    if (given.num !== undefined && want.num !== undefined) {
+      return Math.abs(given.num - want.num) <= 1e-9 * Math.max(1, Math.abs(want.num));
+    }
+    return false;
+  });
 }

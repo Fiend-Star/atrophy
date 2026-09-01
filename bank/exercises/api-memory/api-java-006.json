@@ -1,0 +1,12 @@
+{
+  "id": "api-java-006",
+  "kind": "recall",
+  "axis": "api-memory",
+  "language": "java",
+  "tier": 2,
+  "title": "Two boxed 128s",
+  "prompt": "Java, a stock JVM with no tuning flags.\n\n    Integer a = 128;\n    Integer b = 128;\n    System.out.println(a == b);\n\nWhat does that print?\n\nType true or false.",
+  "softTimeLimitSeconds": 180,
+  "acceptedAnswers": ["false"],
+  "reveal": "false - and the same three lines with 127 instead print true.\n\n`==` on two Integers compares references, never values. Autoboxing compiles to Integer.valueOf(int), which the language spec requires to return shared, cached objects for -128..127; past that it hands back a new object each time, so a and b are two objects and a == b is false.\n\nCompare boxed values with equals(), or unbox one side so the comparison becomes numeric:\n\n    a.equals(b)          // true\n    a.intValue() == b    // true - one int operand unboxes the other\n\nThe cached range is a floor, not a ceiling: -XX:AutoBoxCacheMax can raise the upper bound (the lower one is fixed), so code that leans on == passing at 128 breaks on the next JVM. Boolean caches both values, Byte its whole range, Short/Integer/Long -128..127, Character 0..127 - and Double/Float cache nothing at all, so `Double x = 1.0, y = 1.0;` gives x == y false for every value there is."
+}

@@ -1,0 +1,22 @@
+{
+  "id": "dbg-java-003",
+  "kind": "fix",
+  "axis": "debugging",
+  "language": "java",
+  "tier": 2,
+  "title": "The original order does not survive the sort",
+  "prompt": "sortedAndOriginal(int[] data) must return a List<List<Integer>> with exactly two rows:\nrow 0 is data sorted ascending, row 1 is data in the order it was passed in. The caller\nkeeps using data after the call, so the array itself must come back untouched.\n\nArrays that arrive already sorted look perfect. Anything out of order comes back with\nboth rows agreeing when they should not. Find the bug and fix it - one line is enough.\n\nKeep the class name Solution and the given method signature.",
+  "functionName": "sortedAndOriginal",
+  "starterCode": "import java.util.ArrayList;\nimport java.util.Arrays;\nimport java.util.List;\n\npublic class Solution {\n    static List<List<Integer>> sortedAndOriginal(int[] data) {\n        int[] sorted = data;\n        Arrays.sort(sorted);\n        List<List<Integer>> out = new ArrayList<>();\n        out.add(boxed(sorted));\n        out.add(boxed(data));\n        return out;\n    }\n\n    static List<Integer> boxed(int[] values) {\n        List<Integer> out = new ArrayList<>();\n        for (int v : values) {\n            out.add(v);\n        }\n        return out;\n    }\n}\n",
+  "softTimeLimitSeconds": 420,
+  "testTimeoutMs": 20000,
+  "tests": [
+    { "args": [[3, 1, 2]], "expected": [[1, 2, 3], [3, 1, 2]] },
+    { "args": [[5, 4, 3, 2, 1]], "expected": [[1, 2, 3, 4, 5], [5, 4, 3, 2, 1]] },
+    { "args": [[]], "expected": [[], []] },
+    { "args": [[7]], "expected": [[7], [7]] },
+    { "args": [[1, 2, 3]], "expected": [[1, 2, 3], [1, 2, 3]] },
+    { "args": [[2, 2, 1]], "expected": [[1, 2, 2], [2, 2, 1]] },
+    { "args": [[-1, 10, -5]], "expected": [[-5, -1, 10], [-1, 10, -5]] }
+  ]
+}

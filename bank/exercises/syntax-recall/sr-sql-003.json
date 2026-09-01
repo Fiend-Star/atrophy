@@ -1,0 +1,25 @@
+{
+  "id": "sr-sql-003",
+  "kind": "write",
+  "axis": "syntax-recall",
+  "language": "sql",
+  "tier": 2,
+  "title": "Customers who never ordered",
+  "prompt": "SQLite. Submit exactly one statement - a single SELECT, optionally preceded by a WITH clause (a second, semicolon-separated statement is rejected).\n\nTables:\n  customers(id INTEGER PRIMARY KEY, name TEXT NOT NULL)\n  orders(id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL)\n\nEvery orders.customer_id points at a customers.id and is never NULL. Return the name of\nevery customer who has no orders at all. One column, named exactly: name. Row order does\nnot matter, and any formulation that returns the right rows scores the same.",
+  "starterCode": "-- one SELECT; one column: name\n",
+  "softTimeLimitSeconds": 480,
+  "cases": [
+    {
+      "fixture": "CREATE TABLE customers (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL\n);\nCREATE TABLE orders (\n  id INTEGER PRIMARY KEY,\n  customer_id INTEGER NOT NULL REFERENCES customers(id)\n);\nINSERT INTO customers (id, name) VALUES\n  (1, 'ana'),\n  (2, 'bo'),\n  (3, 'cy'),\n  (4, 'dee');\nINSERT INTO orders (id, customer_id) VALUES\n  (1, 1),\n  (2, 3),\n  (3, 1);\n",
+      "expectedRows": [{ "name": "bo" }, { "name": "dee" }]
+    },
+    {
+      "fixture": "CREATE TABLE customers (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL\n);\nCREATE TABLE orders (\n  id INTEGER PRIMARY KEY,\n  customer_id INTEGER NOT NULL REFERENCES customers(id)\n);\nINSERT INTO customers (id, name) VALUES\n  (1, 'eve'),\n  (2, 'fay'),\n  (3, 'gil');\nINSERT INTO orders (id, customer_id) VALUES\n  (1, 2),\n  (2, 3),\n  (3, 3),\n  (4, 2);\n",
+      "expectedRows": [{ "name": "eve" }]
+    },
+    {
+      "fixture": "CREATE TABLE customers (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL\n);\nCREATE TABLE orders (\n  id INTEGER PRIMARY KEY,\n  customer_id INTEGER NOT NULL REFERENCES customers(id)\n);\nINSERT INTO customers (id, name) VALUES\n  (1, 'hal'),\n  (2, 'ivy');\nINSERT INTO orders (id, customer_id) VALUES\n  (1, 2),\n  (2, 1);\n",
+      "expectedRows": []
+    }
+  ]
+}

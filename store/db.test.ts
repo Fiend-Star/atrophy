@@ -61,6 +61,39 @@ describe("Store", () => {
     expect(store.allSessions()).toHaveLength(2);
   });
 
+  it("lists recent session languages most-recent-first, across axes, capped at n", () => {
+    expect(store.recentSessionLanguages(6)).toEqual([]);
+
+    const base = {
+      exercise_id: "x",
+      axis: "syntax-recall",
+      tier: 1,
+      mode: "ai-off" as const,
+      passed: 1,
+      total: 1,
+      elapsed_seconds: 10,
+      score: 1,
+      rating_before: 1200,
+      rating_after: 1216,
+    };
+    const days: [string, string][] = [
+      ["2026-07-01T10:00:00Z", "python"],
+      ["2026-07-02T10:00:00Z", "javascript"],
+      ["2026-07-03T10:00:00Z", "java"],
+      ["2026-07-04T10:00:00Z", "sql"],
+      ["2026-07-05T10:00:00Z", "any"],
+      ["2026-07-06T10:00:00Z", "java"],
+      // the last two share a timestamp: insertion order (id) breaks the tie
+      ["2026-07-07T10:00:00Z", "python"],
+      ["2026-07-07T10:00:00Z", "java"],
+    ];
+    for (const [ts, language] of days) {
+      store.recordSession({ ...base, ts, language, axis: language === "any" ? "decomposition" : "syntax-recall" });
+    }
+
+    expect(store.recentSessionLanguages(6)).toEqual(["java", "python", "java", "any", "sql", "java"]);
+  });
+
   it("backs up to a re-openable copy, and clear empties the store", async () => {
     store.saveRating("debugging", { rating: 1300, rd: 100, reps: 4 }, 2);
     store.recordSession({

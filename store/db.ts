@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Axis } from "../bank/schema.js";
+import type { Axis, Language } from "../bank/schema.js";
 import {
   INITIAL_RATING,
   INITIAL_RD,
@@ -67,6 +67,7 @@ export class Store {
         rating_after REAL NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_sessions_axis_ts ON sessions(axis, ts);
+      CREATE INDEX IF NOT EXISTS idx_sessions_ts ON sessions(ts);
       CREATE TABLE IF NOT EXISTS ratings (
         axis TEXT PRIMARY KEY,
         rating REAL NOT NULL,
@@ -125,6 +126,20 @@ export class Store {
         "SELECT * FROM sessions WHERE axis = ? ORDER BY ts DESC, id DESC LIMIT ?",
       )
       .all(axis, limit);
+  }
+
+  /**
+   * Languages of the last n sessions across all axes, most-recent-first - the
+   * window the language-mix soft-cap reads (spec E1). "any" rows (language-
+   * agnostic drills) are included; selection knows not to penalize those.
+   */
+  recentSessionLanguages(n: number): (Language | "any")[] {
+    return this.db
+      .prepare<[number], { language: string }>(
+        "SELECT language FROM sessions ORDER BY ts DESC, id DESC LIMIT ?",
+      )
+      .all(n)
+      .map((r) => r.language as Language | "any");
   }
 
   /** Tier the given exercise was most recently played at (for exact replay). */

@@ -7,15 +7,23 @@ import pc from "picocolors";
 import {
   totalUnits,
   type ClozeExercise,
-  type CodeExercise,
+  type CodeLikeExercise,
   type Exercise,
   type OutlineExercise,
   type PredictExercise,
+  type RecallExercise,
 } from "../bank/schema.js";
 import {
-  grade,
+  acceptedForBlank,
+  blankResults,
+  countBlanks,
   gradeCloze,
+  promptCount,
+} from "./cloze.js";
+import {
+  grade,
   gradePrediction,
+  gradeRecall,
   solutionFileName,
   type GradeResult,
 } from "./grader.js";
@@ -46,6 +54,8 @@ export async function runDrill(
   switch (ex.kind) {
     case "write":
     case "fix":
+    case "write-harness":
+    case "fix-harness":
       return codeDrill(ex, solutionOverride);
     case "predict-output":
       return predictDrill(ex, solutionOverride);
@@ -53,6 +63,8 @@ export async function runDrill(
       return clozeDrill(ex, solutionOverride);
     case "outline":
       return outlineDrill(ex, solutionOverride);
+    case "recall":
+      return recallDrill(ex, solutionOverride);
   }
 }
 
@@ -88,6 +100,8 @@ export function previewExercise(ex: Exercise): void {
   switch (ex.kind) {
     case "write":
     case "fix":
+    case "write-harness":
+    case "fix-harness":
       console.log(pc.dim("starter code:"));
       console.log(ex.starterCode.trim());
       break;
@@ -96,13 +110,18 @@ export function previewExercise(ex: Exercise): void {
       console.log(pc.dim("─".repeat(60)));
       console.log(pc.dim("(you would predict this program's exact stdout)"));
       break;
-    case "cloze":
+    case "cloze": {
       console.log(ex.snippet.trimEnd());
       console.log(pc.dim("─".repeat(60)));
-      console.log(pc.dim("(you would fill the ____ blank)"));
+      const blanks = countBlanks(ex.snippet);
+      console.log(pc.dim(blanks > 1 ? `(you would fill the ${blanks} ____ blanks)` : "(you would fill the ____ blank)"));
       break;
+    }
     case "outline":
       console.log(pc.dim(`(you would outline an approach, self-scored against ${ex.rubric.length} rubric points)`));
+      break;
+    case "recall":
+      console.log(pc.dim("(you would type a short answer; numeric forms like 1/4, 0.25, 25% are equivalent)"));
       break;
   }
   console.log(
@@ -185,18 +204,28 @@ async function readMultiline(rl: Interface): Promise<string> {
 
 // ---------- write / fix (editor + hidden tests) ----------
 
-function commentPrefix(ex: CodeExercise): string {
-  return ex.language === "python" ? "#" : "//";
+function commentPrefix(ex: CodeLikeExercise): string {
+  if (ex.language === "python") return "#";
+  // sql is not a "//" language: the header below is prepended to the file the grader
+  // hands straight to db.prepare(), so the wrong prefix fails the drill before the
+  // user's query is even read.
+  if (ex.language === "sql") return "--";
+  return "//";
 }
 
-function buildSolutionFile(ex: CodeExercise): string {
+/** fix-shaped kinds hand the user buggy code; write-shaped kinds hand them a blank slate. */
+function isFixKind(ex: CodeLikeExercise): boolean {
+  return ex.kind === "fix" || ex.kind === "fix-harness";
+}
+
+function buildSolutionFile(ex: CodeLikeExercise): string {
   const c = commentPrefix(ex);
   const promptLines = ex.prompt
     .trim()
     .split("\n")
     .map((l) => `${c} ${l}`.trimEnd())
     .join("\n");
-  const task = ex.kind === "fix" ? "Find and fix the bug below" : ex.title;
+  const task = isFixKind(ex) ? "Find and fix the bug below" : ex.title;
   return `${c} ${task}  [${ex.axis} / tier ${ex.tier} / ${ex.language}]
 ${c}
 ${promptLines}
@@ -214,6 +243,12 @@ function printFailures(result: GradeResult): void {
     return;
   }
   for (const f of result.failures.slice(0, 3)) {
+    // Exercise-supplied harnesses report named checks, not call/expected pairs:
+    // their index is a failure-list ordinal, so "test #N" would be a lie.
+    if (f.args === undefined) {
+      console.log(pc.red(`\n✗ ${f.error ?? "check failed"}`));
+      continue;
+    }
     if (f.index === -1) {
       console.log(pc.red("\nCould not load your solution:"));
       console.log(pc.dim(f.error ?? "unknown error"));
@@ -228,7 +263,7 @@ function printFailures(result: GradeResult): void {
   if (hidden > 0) console.log(pc.dim(`  …and ${hidden} more failing test(s)`));
 }
 
-async function codeDrill(ex: CodeExercise, solutionOverride?: string): Promise<DrillOutcome> {
+async function codeDrill(ex: CodeLikeExercise, solutionOverride?: string): Promise<DrillOutcome> {
   return withScratchDir(async (dir) => {
     const file = join(dir, solutionFileName(ex));
     writeFileSync(file, buildSolutionFile(ex), "utf8");
@@ -239,13 +274,21 @@ async function codeDrill(ex: CodeExercise, solutionOverride?: string): Promise<D
     if (solutionOverride) {
       copyFileSync(solutionOverride, file);
       const result = await grade(ex, dir);
-      const passed = result.harnessError ? 0 : result.passed;
-      return makeOutcome(ex, passed, elapsed());
+      // A harnessError produced no graded checks, so it is never evidence about the
+      // user - a missing JDK, a javac failure or a broken install must not score them.
+      // The interactive loop just stays open; the scripted path has no loop to fall
+      // back into, so it abandons instead, and drillOnce records nothing for an
+      // abandoned outcome. That is what keeps a broken toolchain off the rating.
+      if (result.harnessError) {
+        printFailures(result);
+        return makeOutcome(ex, 0, elapsed(), true);
+      }
+      return makeOutcome(ex, result.passed, elapsed());
     }
 
     printHeader(ex);
     const opened = openEditor(file);
-    printEditorInstructions(file, opened, ex.kind === "fix" ? "the fix" : "your solution");
+    printEditorInstructions(file, opened, isFixKind(ex) ? "the fix" : "your solution");
     printTimer(ex);
 
     const initialContent = buildSolutionFile(ex);
@@ -279,7 +322,29 @@ async function codeDrill(ex: CodeExercise, solutionOverride?: string): Promise<D
         }
 
         const result = await grade(ex, dir);
-        const passed = result.harnessError ? 0 : result.passed;
+        // A harnessError is never drill evidence: a missing JDK, a broken install, a
+        // javac error, a bad exercise fixture - or, in *any* language, a timeout, which
+        // parseMarker reports here because a killed run prints no marker line. None of
+        // them produced a graded check. So it does not burn a single-submission drill,
+        // is not reported as a score (0/n would read as a verdict on the user), and -
+        // crucially - does not arm "s", which ends the drill at the last result and lets
+        // drillOnce record it. The loop just stays open: fix the code, submit again.
+        if (result.harnessError) {
+          printFailures(result);
+          continue;
+        }
+        const passed = result.passed;
+        // Whiteboard mode: one graded submission, no fix-and-resubmit loop.
+        // submitPolicy has no schema default, so "not single" is the loop, not "loop".
+        if (ex.submitPolicy === "single") {
+          if (passed === result.total) {
+            console.log(pc.green(`\n✓ ${passed}/${result.total} tests passed`) + pc.dim(` in ${Math.round(elapsed())}s`));
+          } else {
+            console.log(pc.red(`\n${passed}/${result.total} tests passed.`) + pc.dim("  whiteboard mode: single submission, no retries"));
+            printFailures(result);
+          }
+          return makeOutcome(ex, passed, elapsed());
+        }
         if (passed === result.total) {
           console.log(pc.green(`\n✓ ${passed}/${result.total} tests passed`) + pc.dim(` in ${Math.round(elapsed())}s`));
           return makeOutcome(ex, passed, elapsed());
@@ -343,32 +408,85 @@ async function predictDrill(ex: PredictExercise, solutionOverride?: string): Pro
   });
 }
 
-// ---------- cloze (fill in the blank) ----------
+// ---------- cloze (fill in the blanks) ----------
 
 async function clozeDrill(ex: ClozeExercise, solutionOverride?: string): Promise<DrillOutcome> {
   const started = Date.now();
   const elapsed = () => (Date.now() - started) / 1000;
+  // One ask per blank when the exercise lists answers per blank; one ask total when a
+  // single answer fills them all. Blanks are graded units either way.
+  const asks = promptCount(ex);
+  const blanks = countBlanks(ex.snippet);
+
+  const finish = (answers: string[]): DrillOutcome => {
+    const { blanksCorrect, totalBlanks } = gradeCloze(ex, answers);
+    if (blanksCorrect === totalBlanks) {
+      console.log(pc.green("\n✓ correct") + pc.dim(` in ${Math.round(elapsed())}s`));
+    } else if (asks === 1) {
+      console.log(pc.red("\n✗ nope.") + ` Accepted: ${acceptedForBlank(ex, 0).join(" | ")}`);
+    } else {
+      console.log(pc.red(`\n✗ ${blanksCorrect}/${totalBlanks} blanks correct.`));
+      blankResults(ex, answers).forEach((ok, i) => {
+        if (!ok) console.log(pc.dim(`  blank ${i + 1} accepted: ${acceptedForBlank(ex, i).join(" | ")}`));
+      });
+    }
+    return makeOutcome(ex, blanksCorrect, elapsed());
+  };
 
   if (solutionOverride) {
-    const answer = readFileSync(solutionOverride, "utf8").split(/\r?\n/)[0] ?? "";
-    return makeOutcome(ex, gradeCloze(ex, answer) ? 1 : 0, elapsed());
+    // One answer per line, in blank order; a short file leaves the rest unfilled.
+    const lines = readFileSync(solutionOverride, "utf8").split(/\r?\n/);
+    return finish(lines.slice(0, asks).map((line) => line.trim()));
   }
 
   printHeader(ex);
   console.log(ex.snippet.trimEnd());
   console.log(pc.dim("─".repeat(60)));
   printTimer(ex);
+  if (asks === 1 && blanks > 1) console.log(pc.dim(`One answer fills all ${blanks} blanks.`));
 
   return withReadline(async (rl) => {
-    const answer = (await rl.question(pc.bold("\nFill the blank ____ (q to abandon) > "))).trim();
-    if (answer.toLowerCase() === "q") return makeOutcome(ex, 0, elapsed(), true);
-    const correct = gradeCloze(ex, answer);
-    if (correct) {
-      console.log(pc.green("\n✓ correct") + pc.dim(` in ${Math.round(elapsed())}s`));
-    } else {
-      console.log(pc.red("\n✗ nope.") + ` Accepted: ${ex.acceptedAnswers.join(" | ")}`);
+    const answers: string[] = [];
+    for (let i = 0; i < asks; i++) {
+      const label = asks > 1 ? `\nBlank ${i + 1}/${asks} (q to abandon) > ` : "\nFill the blank ____ (q to abandon) > ";
+      const answer = (await rl.question(pc.bold(label))).trim();
+      if (answer.toLowerCase() === "q") return makeOutcome(ex, 0, elapsed(), true);
+      answers.push(answer);
     }
+    return finish(answers);
+  });
+}
+
+// ---------- recall (short answer, numeric-tolerant) ----------
+
+async function recallDrill(ex: RecallExercise, solutionOverride?: string): Promise<DrillOutcome> {
+  const started = Date.now();
+  const elapsed = () => (Date.now() - started) / 1000;
+
+  const finish = (correct: boolean): DrillOutcome => {
+    if (correct) console.log(pc.green("\n✓ correct") + pc.dim(` in ${Math.round(elapsed())}s`));
+    else console.log(pc.red("\n✗ nope.") + ` Accepted: ${ex.acceptedAnswers.join(" | ")}`);
+    // The reveal is the teaching moment, so it follows both outcomes - but only after
+    // an answer: abandoning returns above, without being handed the derivation.
+    // trimEnd, not trim: a reveal that opens with an indented table row keeps that indent.
+    // Leading whitespace is only ever the first line's, and stripping it shifts that one
+    // row left while every row below it stays put.
+    if (ex.reveal) console.log(pc.dim(`\n${ex.reveal.trimEnd()}`));
     return makeOutcome(ex, correct ? 1 : 0, elapsed());
+  };
+
+  if (solutionOverride) {
+    const answer = readFileSync(solutionOverride, "utf8").split(/\r?\n/)[0] ?? "";
+    return finish(gradeRecall(ex, answer));
+  }
+
+  printHeader(ex);
+  printTimer(ex);
+
+  return withReadline(async (rl) => {
+    const answer = (await rl.question(pc.bold("\nYour answer (q to abandon) > "))).trim();
+    if (answer.toLowerCase() === "q") return makeOutcome(ex, 0, elapsed(), true);
+    return finish(gradeRecall(ex, answer));
   });
 }
 

@@ -1,0 +1,12 @@
+{
+  "id": "api-py-006",
+  "kind": "recall",
+  "axis": "api-memory",
+  "language": "python",
+  "tier": 1,
+  "title": "Popping the front of a list",
+  "prompt": "Python 3, CPython's built-in list, holding n elements.\n\n    items.pop()     # removes and returns the last element\n    items.pop(0)    # removes and returns the first element\n\nWhat is the time complexity of items.pop(0)?\n\nType the Big-O expression only, in terms of n - no prose, e.g. O(n log n).",
+  "softTimeLimitSeconds": 120,
+  "acceptedAnswers": ["O(n)", "n", "linear"],
+  "reveal": "O(n). A list is a contiguous array of pointers, so removing index 0 shifts every remaining element one slot to the left. items.pop() off the end is O(1) - nothing moves.\n\nThat makes the obvious queue quadratic: draining n items with pop(0) is O(n^2). collections.deque is the fix - popleft() and appendleft() are O(1).\n\n  items[i]            O(1)\n  items.append(x)     O(1) amortized  (the backing array doubles, so the copies sum to O(n) over n appends)\n  items.pop()         O(1)\n  items.pop(0)        O(n)\n  items.insert(0, x)  O(n)\n  del items[0]        O(n)\n  x in items          O(n)\n\nThe shape is the data structure's, not the language's: ArrayList.remove(0) in Java is O(n) for the same reason, and ArrayDeque is that language's answer."
+}

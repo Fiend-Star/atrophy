@@ -59,18 +59,43 @@ Not every skill is "write code against tests" - see the table below.
 
 | Skill | The drill | Graded by |
 |---|---|---|
-| **Syntax recall** | Write a small function from a spec | Hidden tests |
+| **Syntax recall** | Write a small function from a spec, one SQL `SELECT` against a fixture schema, or a concurrency primitive against its own harness | Hidden tests - for SQL, the rows the query returns; harness checks for the harness drills |
 | **Debugging** | Working-looking code has one planted bug - find and fix it | Hidden tests |
 | **Code reading** | Read a snippet, type exactly what it prints | Compared to the snippet's real output |
-| **API memory** | Fill in the blanked-out stdlib call | Answer match |
-| **Decomposition** | Outline a design (rate limiter, folder sync…) in bullets | You score yourself against a revealed rubric |
+| **API memory** | Fill in the blanked-out stdlib call, implement the API against a shipped harness, or answer a short recall question testing a general fact. Packs can add a multi-blank snippet scored one point per blank | Answer match, or harness checks |
+| **Decomposition** | Outline a design (rate limiter, folder sync…) in bullets - or build it: an algorithm against tests, a data structure against its own harness | Self-scored against a revealed rubric; the build drills by tests or harness checks |
 
-Exercises come in Python and JavaScript across three difficulty tiers - a
-hand-written static bank plus **generator families that render endless fresh
+The built-in bank spans Python, JavaScript, Java and SQL across three tiers -
+a hand-written static bank plus **generator families that render endless fresh
 variants** (randomized data, names, and twists; same seed always reproduces
 the same exercise). Difficulty targets *you*: each drill picks the tier where
 your predicted success is closest to ~65%, the point where a rep carries the
 most information. Comfortable wins teach the rating nothing.
+
+Languages mix themselves. With no `--lang`, any one language holding three or
+more of your last six recorded drills has its candidates weighted down to a
+quarter for the next pick, so a streak in one language works against itself
+instead of compounding. It's a nudge, not a filter: if that language is all
+the bank has for the skill that came up, you still get it. Language-agnostic
+drills never count toward the three and are never weighted down. Asking for a
+language (`--lang java`) switches the nudge off - that's you steering - and
+`atrophy baseline` opts out too, since it already forces one drill per skill.
+
+Java drills are graded too (`--lang java`, needs a JDK - see Install), and
+they add one more kind: a **behavioral** drill where the exercise ships its
+own Java test harness, so it can grade concurrency - races, deadlocks,
+visibility - instead of a return value. Java ships on every skill - 22 static
+exercises plus four generator families - and you can add more of your own as
+a pack (see Packs).
+
+SQL drills (`--lang sql`) need no toolchain at all. The syntax-recall ones
+have you submit a single `SELECT`, which runs against the exercise's own
+fixture schema inside the bundled SQLite that already stores your ratings:
+each exercise carries several cases with different fixtures, and grading
+compares the rows your query returns to the expected rows case by case - so a
+query that hardcodes one case's answer scores exactly that one case. `--lang
+sql` also reaches a recall question on the API memory axis, graded the same
+numeric-tolerant answer match as any other recall drill.
 
 ## The dashboard
 
@@ -114,7 +139,15 @@ measure: [docs/research.md](docs/research.md).
 
 ## Install
 
-Requires Node.js ≥ 22, plus Python 3 on `PATH` if you want the Python exercises.
+Requires Node.js ≥ 22. Python 3 on `PATH` grades the Python exercises; a JDK
+≥ 21 (Temurin recommended) grades the Java ones. A drill can only be graded
+if its language's toolchain is installed, so install whichever you plan to
+practise - `atrophy doctor` reports what it found. SQL is the exception and
+needs nothing installed: it grades on the SQLite the package already bundles.
+On Windows, if the `javac` on your `PATH` is a `.cmd`/`.bat` shim (some
+version managers install one), point `ATROPHY_JAVA_HOME` at the JDK directory
+instead: grading runs the toolchain without a shell, which cannot execute
+shims.
 
 ```sh
 npm install -g atrophy
@@ -128,18 +161,59 @@ atrophy baseline
 | `atrophy baseline` | First session: one drill per skill (~25 min) |
 | `atrophy drill` | One drill on your most-neglected skill |
 | `atrophy drill --axis debugging` | Drill a specific skill (`syntax-recall`, `debugging`, `code-reading`, `api-memory`, `decomposition`) |
-| `atrophy drill --lang python` | Only Python (or `javascript`) exercises |
+| `atrophy drill --lang python` | Restrict to Python (or `javascript`, `java`, `sql`) - language-agnostic drills still qualify, so a rep may come back in no language at all; packs may add drills that declare no language, and those qualify too |
 | `atrophy drill --ai-on` | Monthly comparison rep with AI allowed |
 | `atrophy publish --handle you` | Opt in to the [public leaderboard](https://ashutosh-rath02.github.io/atrophy/leaderboard.html); afterwards every drill syncs automatically (`--stop` opts out) |
 | `atrophy stats` | Ratings table and week streak in the terminal |
+| `atrophy doctor` | Check your setup: runtimes, editor, sandbox, bank, packs |
 | `atrophy serve` | Dashboard at `127.0.0.1:4646` |
 | `atrophy export -o out.json` | Dump all your data as JSON |
+
+## Choose your languages / pick a track
+
+By default every command draws from every language and every pack. `atrophy
+setup` lets you narrow that once, and every later `drill`/`baseline` respects
+it - no flags to remember every time:
+
+```sh
+atrophy setup                         # interactive: pick languages, pick a track
+atrophy setup --languages java,sql    # non-interactive: set the language allowlist directly
+atrophy drill --track aurora          # focus this one run on a single pack, without touching config
+```
+
+Two rules worth knowing: an explicit `--lang` on `drill`/`baseline` always
+wins over the configured allowlist - that's you steering, not the config
+guessing for you - and a track is just a pack, named by its `pack.json` (see
+[Packs](#packs) below) or by its folder name when it has none. Narrowing is
+never silent either way: whatever the allowlist or track focus hides gets
+reported before the drill starts, and `atrophy setup --show` (or `atrophy
+doctor`) shows the same picture on demand.
 
 ## Your data
 
 One SQLite file at `~/.atrophy/atrophy.db`, owned by you. No account, no
 sync, no telemetry, nothing leaves your machine. `ATROPHY_DB` overrides the
 location if you want it in a dotfiles repo or synced folder.
+
+### Packs
+
+A pack is a directory of exercise JSON files that merges with the built-in
+bank - your team's interview questions, the Java drills you wrote, whatever
+you want in the rotation. Point at one either way:
+
+```sh
+export ATROPHY_PACKS=/path/to/pack   # several: ':'-separated (';' on Windows)
+# or, in ~/.atrophy/config.json:
+# { "packs": ["C:/path/to/pack"] }
+```
+
+Both sources are additive and de-duplicated; a directory that doesn't exist,
+or an exercise id that collides with one already loaded, is an error you see
+immediately rather than a drill that silently disappears. `atrophy doctor`
+lists every pack it resolved and how many exercises each one loaded.
+
+Packs are code that runs on your machine during grading - only add
+directories you trust.
 
 ## Honest limitations
 
@@ -159,13 +233,27 @@ location if you want it in a dotfiles repo or synced folder.
 git clone https://github.com/ashutosh-rath02/atrophy.git
 cd atrophy && npm install
 npm run dev -- drill    # CLI from source
-npm test                # 70 tests, incl. real grading subprocesses
+npm test                # 330+ tests, incl. real grading subprocesses
 ```
 
 New exercises are the most welcome contribution: one JSON file under
 `bank/exercises/<skill>/`, validated by `bank/schema.ts`. CI proves every
 planted bug actually fails a test and every code-reading snippet runs
 deterministically, so a broken exercise can't merge.
+
+Java exercises are the same one-file flow (`"language": "java"`, with
+`starterCode` a `public class Solution` and no `package` line). Behavioral
+drills use `"kind": "write-harness"` or `"fix-harness"` and ship their own
+`testCode` - a `public class Harness` with a `main` that prints the result
+line - plus `totalChecks`, the number of checks that harness must report.
+CI compiles every Java starter and holds the harness to that count.
+
+SQL write exercises (`"language": "sql"`, `"kind": "write"`) carry `cases`
+instead of `tests`: each case is a `fixture` of `CREATE`/`INSERT` statements
+plus the `expectedRows` the answer must return. CI applies every fixture
+twice to prove it builds the same database both times, and for each such
+exercise it synthesizes the hardcoded-literal answer and requires that it
+fail at least one case - a question one literal could answer cannot merge.
 
 Roadmap: LLM-judged decomposition drills, more languages, spaced-repetition
 scheduling (FSRS), per-axis leaderboards. More to be added soon.

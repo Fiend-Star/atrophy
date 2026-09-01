@@ -1,0 +1,12 @@
+{
+  "id": "api-js-003",
+  "kind": "recall",
+  "axis": "api-memory",
+  "language": "javascript",
+  "tier": 2,
+  "title": "sort() with no comparator",
+  "prompt": "JavaScript.\n\n    const xs = [10, 9, 1];\n    xs.sort();\n\nAfter this runs, what is xs[2] - the LAST element of xs?\n\nType the number only.",
+  "softTimeLimitSeconds": 180,
+  "acceptedAnswers": ["9"],
+  "reveal": "9, not 10.\n\nArray.prototype.sort with no comparator converts every element to a string and orders by UTF-16 code units, so [10, 9, 1] sorts as \"1\", \"10\", \"9\" and comes back as [1, 10, 9]. Numbers need a comparator:\n\n    xs.sort((a, b) => a - b);   // ascending\n    xs.sort((a, b) => b - a);   // descending\n\nTwo more details that bite:\n  - sort() mutates the array in place AND returns that same array, so `const ys = xs.sort()` is a second name for xs, not a copy. toSorted() (ES2023) is the copying version.\n  - undefined elements are moved to the end and never passed to your comparator, so a comparator cannot rescue them.\n\nThe algorithm itself has been required to be stable since ES2019 - equal elements keep their original order - which is what makes sorting by one key and then another a valid way to sort by both."
+}

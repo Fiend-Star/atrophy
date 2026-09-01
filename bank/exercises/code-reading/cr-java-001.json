@@ -1,0 +1,12 @@
+{
+  "id": "cr-java-001",
+  "kind": "predict-output",
+  "axis": "code-reading",
+  "language": "java",
+  "tier": 1,
+  "title": "Integer division and compound assignment",
+  "prompt": "Read the snippet. Predict its exact stdout (one println per line).",
+  "softTimeLimitSeconds": 120,
+  "testTimeoutMs": 20000,
+  "snippet": "public class Main {\n    public static void main(String[] args) {\n        int total = 7;\n        System.out.println(total / 2);\n        System.out.println(-total / 2);\n        System.out.println(-total % 2);\n\n        int count = 10;\n        count /= 4;\n        System.out.println(count);\n        count += 0.9;\n        System.out.println(count);\n\n        byte small = 100;\n        small *= 3;\n        System.out.println(small);\n    }\n}\n"
+}

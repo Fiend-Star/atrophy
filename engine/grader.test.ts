@@ -2,16 +2,24 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ClozeExercise, CodeExercise, PredictExercise } from "../bank/schema.js";
+import type {
+  CodeExercise,
+  CodeLikeExercise,
+  HarnessExercise,
+  PredictExercise,
+  RecallExercise,
+  TestedExercise,
+} from "../bank/schema.js";
 import {
   grade,
-  gradeCloze,
   gradePrediction,
-  normalizeClozeAnswer,
+  gradeRecall,
   normalizeOutput,
+  normalizeRecallAnswer,
   solutionFileName,
   WHITESPACE_PARTIAL_CREDIT,
 } from "./grader.js";
+import { JAVA_COMPILE_TIMEOUT_MS, hasJdk } from "./javatool.js";
 
 const dirs: string[] = [];
 function scratch(): string {
@@ -49,7 +57,7 @@ const jsEx: CodeExercise = {
   starterCode: "function double(x) {}\nmodule.exports = { double };\n",
 };
 
-function writeSolution(dir: string, ex: CodeExercise, code: string): void {
+function writeSolution(dir: string, ex: CodeLikeExercise, code: string): void {
   writeFileSync(join(dir, solutionFileName(ex)), code, "utf8");
 }
 
@@ -121,6 +129,349 @@ describe("grade - javascript", () => {
     writeSolution(dir, ex, "function make() { return { b: 2, a: 1 }; }\nmodule.exports = { make };\n");
     const r = await grade(ex, dir);
     expect(r.passed).toBe(1);
+  });
+});
+
+// The engine-generated harnesses always print a numeric `passed`, so the only way to
+// reach parseMarker with a broken one is a solution that prints its own marker line
+// and exits before the harness can print the real one. `passed: undefined` would ride
+// out of the drill and into recordSession, where better-sqlite3 throws on the bind -
+// the rep is lost after the user already did the work.
+describe("grade - a solution that forges its own marker line", () => {
+  it("scores a marker with no passed count as a finite 0 (python)", async () => {
+    const dir = scratch();
+    // sys.exit raises SystemExit, which the harness's `except Exception` does not
+    // catch: the interpreter exits 0 and the forged line is the last marker on stdout.
+    writeSolution(dir, pyEx, 'import sys\nprint("ATROPHY_RESULT {}")\nsys.exit(0)\n');
+    const r = await grade(pyEx, dir);
+    expect(Number.isFinite(r.passed)).toBe(true);
+    expect(r.passed).toBe(0);
+  });
+
+  it("scores a marker with a non-numeric passed as a finite 0 (javascript)", async () => {
+    const dir = scratch();
+    // writeSync(1, …) is flushed before process.exit can truncate it.
+    writeSolution(
+      dir,
+      jsEx,
+      'require("node:fs").writeSync(1, \'ATROPHY_RESULT {"passed":"three","total":3}\\n\');\nprocess.exit(0);\n',
+    );
+    const r = await grade(jsEx, dir);
+    expect(Number.isFinite(r.passed)).toBe(true);
+    expect(r.passed).toBe(0);
+  });
+});
+
+const javaEx: CodeExercise = {
+  id: "sr-java-901",
+  kind: "write",
+  axis: "syntax-recall",
+  language: "java",
+  tier: 1,
+  title: "double",
+  prompt: "double it",
+  functionName: "twice",
+  starterCode: "public class Solution {\n    static int twice(int x) {\n        throw new UnsupportedOperationException(\"implement me\");\n    }\n}\n",
+  softTimeLimitSeconds: 300,
+  testTimeoutMs: 30_000,
+  tests: [
+    { args: [2], expected: 4 },
+    { args: [-1], expected: -2 },
+    { args: [0], expected: 0 },
+  ],
+};
+
+if (!hasJdk()) console.warn("⚠ JDK not found - Java grader tests SKIPPED. Install JDK 21 to validate Java grading.");
+describe.skipIf(!hasJdk())("grade - java", () => {
+  it("passes a correct solution", async () => {
+    const dir = scratch();
+    writeSolution(dir, javaEx, "public class Solution {\n    static int twice(int x) { return x * 2; }\n}\n");
+    const r = await grade(javaEx, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(3);
+    expect(r.total).toBe(3);
+  }, 60_000);
+
+  it("reports per-test failures with expected vs actual", async () => {
+    const dir = scratch();
+    writeSolution(dir, javaEx, "public class Solution {\n    static int twice(int x) { return x + 2; }\n}\n");
+    const r = await grade(javaEx, dir);
+    expect(r.passed).toBe(1);
+    expect(r.failures.length).toBe(2);
+    expect(r.failures[0]?.expected).toBe(-2);
+    expect(r.failures[0]?.actual).toBe(1);
+  }, 60_000);
+
+  it("surfaces compile errors as harnessError with javac output", async () => {
+    const dir = scratch();
+    writeSolution(dir, javaEx, "public class Solution { static int twice(int x) { return }\n");
+    const r = await grade(javaEx, dir);
+    expect(r.passed).toBe(0);
+    expect(r.harnessError).toMatch(/javac:/);
+    expect(r.harnessError).toMatch(/error/i);
+  }, 60_000);
+
+  it("names the problem when the method is missing", async () => {
+    const dir = scratch();
+    writeSolution(dir, javaEx, "public class Solution { static int other(int x) { return x; } }\n");
+    const r = await grade(javaEx, dir);
+    expect(r.failures[0]?.error).toMatch(/no method named `twice`/);
+  }, 60_000);
+
+  it("kills infinite loops via the hard timeout", async () => {
+    const dir = scratch();
+    writeSolution(dir, javaEx, "public class Solution {\n    static int twice(int x) { while (true) {} }\n}\n");
+    const fast = { ...javaEx, testTimeoutMs: 5000 };
+    const r = await grade(fast, dir);
+    expect(r.passed).toBe(0);
+    expect(r.harnessError).toMatch(/timed out/);
+    // The budget must cover compile (its own timeout) plus the timed-out run.
+  }, JAVA_COMPILE_TIMEOUT_MS + 60_000);
+});
+
+describe.skipIf(!hasJdk())("grade - java type matrix", () => {
+  const matrix: TestedExercise = {
+    ...javaEx,
+    id: "sr-java-902",
+    functionName: "probe",
+    starterCode: "x",
+    tests: [],
+  };
+  async function gradeWith(solution: string, tests: TestedExercise["tests"]): Promise<ReturnType<typeof grade> extends Promise<infer R> ? R : never> {
+    const dir = scratch();
+    const ex = { ...matrix, tests };
+    writeSolution(dir, ex, solution);
+    return grade(ex, dir);
+  }
+
+  it("coerces int[] and returns arrays as lists", async () => {
+    const r = await gradeWith(
+      "public class Solution { static int[] probe(int[] xs) { int[] out = new int[xs.length]; for (int i = 0; i < xs.length; i++) out[i] = xs[i] * 2; return out; } }",
+      [{ args: [[1, 2, 3]], expected: [2, 4, 6] }],
+    );
+    expect(r.passed).toBe(1);
+  }, 60_000);
+
+  it("coerces List<Integer> via generics (elements are Integer, not Double)", async () => {
+    const r = await gradeWith(
+      "import java.util.List;\npublic class Solution { static int probe(List<Integer> xs) { int s = 0; for (int x : xs) s += x; return s; } }",
+      [{ args: [[1, 2, 3]], expected: 6 }],
+    );
+    expect(r.passed).toBe(1);
+  }, 60_000);
+
+  it("treats 2.0 and 2 as equal (number model)", async () => {
+    const r = await gradeWith(
+      "public class Solution { static double probe(int x) { return x * 1.0; } }",
+      [{ args: [2], expected: 2 }],
+    );
+    expect(r.passed).toBe(1);
+  }, 60_000);
+
+  it("supports Map returns with sorted keys and instance methods", async () => {
+    const r = await gradeWith(
+      "import java.util.Map;\nimport java.util.HashMap;\npublic class Solution { Map<String, Integer> probe(String k) { Map<String, Integer> m = new HashMap<>(); m.put(k, 1); m.put(\"a\", 2); return m; } }",
+      [{ args: ["z"], expected: { a: 2, z: 1 } }],
+    );
+    expect(r.passed).toBe(1);
+  }, 60_000);
+
+  it("accepts char params as 1-char strings; names overload ambiguity", async () => {
+    const ok = await gradeWith(
+      "public class Solution { static String probe(char c) { return String.valueOf(c) + c; } }",
+      [{ args: ["x"], expected: "xx" }],
+    );
+    expect(ok.passed).toBe(1);
+    const overloaded = await gradeWith(
+      "public class Solution { static int probe(int x) { return x; } static int probe(String s) { return 0; } }",
+      [{ args: [1], expected: 1 }],
+    );
+    expect(overloaded.failures[0]?.error).toMatch(/overloads are not supported/);
+  }, 60_000);
+});
+
+const harnessEx: HarnessExercise = {
+  id: "conc-java-901",
+  kind: "write-harness",
+  axis: "syntax-recall",
+  language: "java",
+  tier: 3,
+  title: "counter",
+  prompt: "Make Counter.increment() thread-safe.",
+  softTimeLimitSeconds: 600,
+  testTimeoutMs: 30_000,
+  totalChecks: 2,
+  starterCode: "public class Solution {\n    private int n = 0;\n    public void increment() { n++; }\n    public int value() { return n; }\n}\n",
+  testCode: `public class Harness {
+    public static void main(String[] args) throws Exception {
+        Atrophy.plan(2);
+        Atrophy.watchdog(20_000);
+        Solution s = new Solution();
+        Thread[] ts = new Thread[4];
+        for (int i = 0; i < 4; i++) {
+            ts[i] = new Thread(() -> { for (int k = 0; k < 25_000; k++) s.increment(); });
+        }
+        for (Thread t : ts) t.start();
+        for (Thread t : ts) t.join();
+        Atrophy.check("100k increments survive 4 threads", s.value() == 100_000);
+        Atrophy.check("value() is non-negative", s.value() >= 0);
+        Atrophy.report();
+    }
+}`,
+};
+
+describe.skipIf(!hasJdk())("grade - java testCode", () => {
+  it("grades a correct solution via the exercise's own harness", async () => {
+    const dir = scratch();
+    writeSolution(dir, harnessEx, "public class Solution {\n    private int n = 0;\n    public synchronized void increment() { n++; }\n    public synchronized int value() { return n; }\n}\n");
+    const r = await grade(harnessEx, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(2);
+    expect(r.total).toBe(2);
+  }, 90_000);
+
+  it("fails the racy starter deterministically-shaped output (named check failures)", async () => {
+    const dir = scratch();
+    writeSolution(dir, harnessEx, harnessEx.starterCode);
+    const r = await grade(harnessEx, dir);
+    // the unsynchronized starter may occasionally pass the race by luck; the shape is what we assert
+    expect(r.total).toBe(2);
+    for (const f of r.failures) {
+      expect(f.error).toBeTruthy();
+      expect(f.args).toBeUndefined();
+    }
+  }, 90_000);
+
+  it("rejects a harness whose reported total differs from totalChecks", async () => {
+    const dir = scratch();
+    const lying: HarnessExercise = {
+      ...harnessEx,
+      id: "conc-java-902",
+      testCode: 'public class Harness { public static void main(String[] a) { System.out.println("ATROPHY_RESULT {\\"passed\\":7,\\"total\\":7,\\"failures\\":[]}"); } }',
+    };
+    writeSolution(dir, lying, lying.starterCode);
+    const r = await grade(lying, dir);
+    expect(r.harnessError).toMatch(/reported 7 checks but the exercise declares 2/);
+    expect(r.passed).toBe(0);
+  }, 90_000);
+
+  it("survives a harness that prints an unparseable marker line", async () => {
+    const dir = scratch();
+    const garbage: HarnessExercise = {
+      ...harnessEx,
+      id: "conc-java-904",
+      testCode: 'public class Harness { public static void main(String[] a) { System.out.println("ATROPHY_RESULT {oops"); } }',
+    };
+    writeSolution(dir, garbage, garbage.starterCode);
+    const r = await grade(garbage, dir);
+    expect(r.harnessError).toMatch(/unparseable ATROPHY_RESULT/);
+    expect(r.passed).toBe(0);
+    expect(r.total).toBe(2);
+  }, 90_000);
+
+  it("survives a marker line that is valid JSON but not an object", async () => {
+    const dir = scratch();
+    const nullMarker: HarnessExercise = {
+      ...harnessEx,
+      id: "conc-java-905",
+      testCode: 'public class Harness { public static void main(String[] a) { System.out.println("ATROPHY_RESULT null"); } }',
+    };
+    writeSolution(dir, nullMarker, nullMarker.starterCode);
+    const r = await grade(nullMarker, dir);
+    expect(r.harnessError).toMatch(/unparseable ATROPHY_RESULT/);
+    expect(r.passed).toBe(0);
+  }, 90_000);
+
+  it("clamps a lying passed count to the declared total", async () => {
+    const dir = scratch();
+    const lying: HarnessExercise = {
+      ...harnessEx,
+      id: "conc-java-906",
+      testCode: 'public class Harness { public static void main(String[] a) { System.out.println("ATROPHY_RESULT {\\"passed\\":7,\\"total\\":2,\\"failures\\":[]}"); } }',
+    };
+    writeSolution(dir, lying, lying.starterCode);
+    const r = await grade(lying, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(2);
+    expect(r.total).toBe(2);
+  }, 90_000);
+
+  it("drops non-object entries from a marker's failures list", async () => {
+    const dir = scratch();
+    const nullEntry: HarnessExercise = {
+      ...harnessEx,
+      id: "conc-java-907",
+      testCode: 'public class Harness { public static void main(String[] a) { System.out.println("ATROPHY_RESULT {\\"passed\\":0,\\"total\\":2,\\"failures\\":[null,{\\"index\\":0,\\"error\\":\\"real check\\"}]}"); } }',
+    };
+    writeSolution(dir, nullEntry, nullEntry.starterCode);
+    const r = await grade(nullEntry, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(0);
+    // A null element here reaches printFailures, which reads f.args off it and throws
+    // out of the drill loop - the good entry must survive, the junk must not.
+    expect(r.failures).toEqual([{ index: 0, error: "real check" }]);
+  }, 90_000);
+
+  it("scores a marker with a non-finite passed as 0 rather than NaN", async () => {
+    const dir = scratch();
+    const noPassed: HarnessExercise = {
+      ...harnessEx,
+      id: "conc-java-908",
+      testCode: 'public class Harness { public static void main(String[] a) { System.out.println("ATROPHY_RESULT {\\"total\\":2,\\"failures\\":[]}"); } }',
+    };
+    writeSolution(dir, noPassed, noPassed.starterCode);
+    const r = await grade(noPassed, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(0);
+    expect(Number.isFinite(r.passed)).toBe(true); // NaN would ride into exerciseScore and the rating
+  }, 90_000);
+
+  it("scores a deadlocked solution 0 with named failures via the watchdog", async () => {
+    const dir = scratch();
+    const deadlockEx: HarnessExercise = { ...harnessEx, id: "conc-java-903", testTimeoutMs: 60_000 };
+    writeSolution(dir, deadlockEx, "public class Solution {\n    public synchronized void increment() { while (true) {} }\n    public int value() { return 0; }\n}\n");
+    const r = await grade(deadlockEx, dir);
+    expect(r.harnessError).toBeUndefined(); // watchdog reported before the external timeout
+    expect(r.passed).toBe(0);
+    expect(r.total).toBe(2);
+    expect(r.failures.some((f) => /not reached|deadlock/i.test(f.error ?? ""))).toBe(true);
+  }, 120_000);
+});
+
+// Deliberately outside the JDK gate: both paths fail before javac is ever spawned,
+// so a host with no JDK still exercises part of the java grader.
+describe("grade - java failure paths that need no JDK", () => {
+  it("returns the install hint when the JDK is missing", async () => {
+    const previous = process.env.ATROPHY_JAVA_HOME;
+    process.env.ATROPHY_JAVA_HOME = join(tmpdir(), "atrophy-no-such-jdk-home");
+    try {
+      const r = await grade(javaEx, scratch());
+      expect(r.passed).toBe(0);
+      expect(r.total).toBe(3);
+      expect(r.harnessError).toMatch(/not found - Java drills need a JDK/);
+    } finally {
+      if (previous === undefined) delete process.env.ATROPHY_JAVA_HOME;
+      else process.env.ATROPHY_JAVA_HOME = previous;
+    }
+  });
+
+  it("reports a staging failure instead of throwing into the drill loop", async () => {
+    // An unusable grading dir makes the harness copy throw, the same branch a broken
+    // install hits. Session.ts has no try/catch around grade(), so an escaping error
+    // would end the session and lose the user's work - it must come back as a result.
+    const r = await grade(javaEx, join(scratch(), "never-created"));
+    expect(r.passed).toBe(0);
+    expect(r.total).toBe(3);
+    expect(r.harnessError).toMatch(/could not stage the Java harness/);
+  });
+
+  it("reports a staging failure for testCode exercises too", async () => {
+    // Same invariant on the harness path: writing Harness.java / copying Atrophy.java
+    // must not throw out of grade() and take the drill session down with it.
+    const r = await grade(harnessEx, join(scratch(), "never-created"));
+    expect(r.passed).toBe(0);
+    expect(r.total).toBe(harnessEx.totalChecks);
+    expect(r.harnessError).toMatch(/could not stage the Java harness/);
   });
 });
 
@@ -202,30 +553,115 @@ describe("gradePrediction", () => {
   });
 });
 
-const clozeEx: ClozeExercise = {
-  id: "api-py-901",
-  kind: "cloze",
-  axis: "api-memory",
-  language: "python",
-  tier: 1,
-  title: "sort by length",
-  prompt: "fill the blank",
-  softTimeLimitSeconds: 60,
-  testTimeoutMs: 10_000,
-  snippet: "sorted(words, key=____)",
-  acceptedAnswers: ["len"],
-};
+describe.skipIf(!hasJdk())("gradePrediction - java", () => {
+  const predictEx: PredictExercise = {
+    id: "cr-java-901",
+    kind: "predict-output",
+    axis: "code-reading",
+    language: "java",
+    tier: 1,
+    title: "int division",
+    prompt: "What does this print?",
+    softTimeLimitSeconds: 120,
+    testTimeoutMs: 30_000,
+    snippet: 'public class Main {\n    public static void main(String[] args) {\n        System.out.println(7 / 2);\n        System.out.println(7 % 2);\n    }\n}\n',
+  };
 
-describe("gradeCloze", () => {
-  it("matches accepted answers, whitespace-insensitively", () => {
-    expect(gradeCloze(clozeEx, "len")).toBe(true);
-    expect(gradeCloze(clozeEx, "  len ")).toBe(true);
-    expect(gradeCloze(clozeEx, "size")).toBe(false);
+  it("runs the snippet for ground truth and grades exactly", async () => {
+    const r = await gradePrediction(predictEx, scratch(), "3\n1");
+    expect(r.error).toBeUndefined();
+    expect(r.correct).toBe(true);
+  }, 60_000);
+});
+
+// Outside the JDK gate: the spawn fails before any JVM starts, so a host with no
+// JDK still exercises the java prediction path.
+describe("gradePrediction - java with no JDK", () => {
+  it("returns the install hint, not a raw spawn error", async () => {
+    const predictEx: PredictExercise = {
+      ...predictPy,
+      id: "cr-java-902",
+      language: "java",
+      snippet: "public class Main {\n    public static void main(String[] args) {\n        System.out.println(1);\n    }\n}\n",
+    };
+    const previous = process.env.ATROPHY_JAVA_HOME;
+    process.env.ATROPHY_JAVA_HOME = join(tmpdir(), "atrophy-no-such-jdk-home");
+    try {
+      const r = await gradePrediction(predictEx, scratch(), "1");
+      expect(r.correct).toBe(false);
+      expect(r.error).toMatch(/not found - Java drills need a JDK/);
+    } finally {
+      if (previous === undefined) delete process.env.ATROPHY_JAVA_HOME;
+      else process.env.ATROPHY_JAVA_HOME = previous;
+    }
   });
-  it("stays case-sensitive (API names are)", () => {
-    expect(gradeCloze(clozeEx, "LEN")).toBe(false);
+});
+
+// Cloze grading moved to engine/cloze.ts when blanks went multi; its tests went with it.
+
+describe("recall grading (pure, no JDK needed)", () => {
+  const recallEx: RecallExercise = {
+    id: "rec-any-901",
+    kind: "recall",
+    axis: "decomposition",
+    language: "any",
+    tier: 1,
+    title: "coin",
+    prompt: "Probability of two heads in two fair flips?",
+    softTimeLimitSeconds: 120,
+    testTimeoutMs: 10_000,
+    acceptedAnswers: ["1/4"],
+    reveal: "2 independent halves multiply.",
+  };
+
+  it("accepts 1/4, 0.25, 25%, and ' .25 ' as the same number", () => {
+    for (const answer of ["1/4", "0.25", "25%", " .25 ", "25 %"]) {
+      expect(gradeRecall(recallEx, answer), answer).toBe(true);
+    }
+    expect(gradeRecall(recallEx, "1/3")).toBe(false);
+    expect(gradeRecall(recallEx, "banana")).toBe(false);
   });
-  it("collapses internal whitespace runs", () => {
-    expect(normalizeClozeAnswer("lambda  w:  len(w)")).toBe("lambda w: len(w)");
+
+  it("compares non-numeric answers as case-insensitive collapsed text", () => {
+    const textEx: RecallExercise = { ...recallEx, acceptedAnswers: ["O(n log n)"] };
+    expect(gradeRecall(textEx, "o(n  log n)")).toBe(true);
+    expect(gradeRecall(textEx, "O(n^2)")).toBe(false);
+  });
+
+  it("normalizes percent and fraction forms to numbers", () => {
+    expect(normalizeRecallAnswer("25%").num).toBeCloseTo(0.25, 12);
+    expect(normalizeRecallAnswer("-3/6").num).toBeCloseTo(-0.5, 12);
+    expect(normalizeRecallAnswer("1e-3").num).toBeCloseTo(0.001, 12);
+    expect(normalizeRecallAnswer("n log n").num).toBeUndefined();
+  });
+
+  it("keeps the sign on plain decimals, not just on fractions", () => {
+    expect(normalizeRecallAnswer("-0.5").num).toBeCloseTo(-0.5, 12);
+    expect(normalizeRecallAnswer("-25%").num).toBeCloseTo(-0.25, 12);
+    const negative: RecallExercise = { ...recallEx, acceptedAnswers: ["-1/2"] };
+    expect(gradeRecall(negative, "-0.5")).toBe(true);
+    expect(gradeRecall(negative, "0.5")).toBe(false);
+  });
+
+  it("accepts an explicit + on integers and exponents", () => {
+    // String(1e21) is "1e+21", so a bank author pasting a computed value writes
+    // the + form; it has to mean the same number the user types without it.
+    expect(normalizeRecallAnswer("1e+3").num).toBeCloseTo(1000, 9);
+    expect(normalizeRecallAnswer("+5").num).toBe(5);
+    expect(gradeRecall({ ...recallEx, acceptedAnswers: ["1e+3"] }, "1000")).toBe(true);
+    expect(gradeRecall({ ...recallEx, acceptedAnswers: ["1000"] }, "1e+3")).toBe(true);
+  });
+
+  it("leaves an undefined fraction as text rather than Infinity", () => {
+    expect(normalizeRecallAnswer("1/0").num).toBeUndefined();
+    expect(gradeRecall({ ...recallEx, acceptedAnswers: ["1/0"] }, "1/0")).toBe(true);
+  });
+
+  it("accepts an answer typed exactly as written, even when it parses to Infinity", () => {
+    // Both sides parse to Infinity, whose difference is NaN, and every comparison
+    // with NaN is false - the numeric branch alone would reject a verbatim answer.
+    const huge: RecallExercise = { ...recallEx, acceptedAnswers: ["1e999"] };
+    expect(gradeRecall(huge, "1e999")).toBe(true);
+    expect(gradeRecall(huge, "12")).toBe(false);
   });
 });

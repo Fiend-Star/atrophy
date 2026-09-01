@@ -11,7 +11,15 @@ export interface ExerciseGenerator {
   /** Id prefix for generated exercises, e.g. "sr-py-cond". */
   family: string;
   axis: Axis;
-  language: Language;
+  /**
+   * The one kind every variant renders. Declared rather than discovered because
+   * selection filters on it (a java `write` needs a JDK, a java `cloze` does not) and
+   * must decide that without generating a variant to look at.
+   */
+  kind: Exercise["kind"];
+  /** "any" for families whose drills are language-agnostic (outline, recall): they are
+   *  offered whatever `--lang` asks for, exactly as an "any" exercise is. */
+  language: Language | "any";
   tiers: readonly number[];
   generate(seed: string, tier: number): Exercise;
 }

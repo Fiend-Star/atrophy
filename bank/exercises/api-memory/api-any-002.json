@@ -1,0 +1,12 @@
+{
+  "id": "api-any-002",
+  "kind": "recall",
+  "axis": "api-memory",
+  "language": "any",
+  "tier": 1,
+  "title": "How wide a UTF-8 code point gets",
+  "prompt": "UTF-8 as standardized today (RFC 3629; Unicode code points run to U+10FFFF). A code point is encoded as a variable number of bytes.\n\nWhat is the largest number of bytes UTF-8 ever uses for a single code point?\n\nType the number only.",
+  "softTimeLimitSeconds": 120,
+  "acceptedAnswers": ["4"],
+  "reveal": "4.\n\n  code points          bytes\n  U+0000 - U+007F      1      ASCII, byte-for-byte identical\n  U+0080 - U+07FF      2      Latin-1 supplement, Greek, Cyrillic, Hebrew, Arabic\n  U+0800 - U+FFFF      3      the rest of the BMP, most CJK included\n  U+10000 - U+10FFFF   4      emoji, historic scripts, rare CJK\n\nThe original 1993 design ran to 6 bytes; RFC 3629 cut it to 4 when Unicode capped itself at U+10FFFF.\n\nThe practical consequence is that bytes, code points, and characters-a-user-sees are three different counts: a buffer or a VARCHAR sized in bytes is not sized in characters, and truncating a byte string at a fixed offset can split a code point in half. UTF-16 has its own version of the trap - a Java char and a JavaScript string index are UTF-16 code units, so an astral code point such as U+1F680 takes two of them: that one-character string has length 2 in Java and JavaScript, and 1 in Python 3."
+}

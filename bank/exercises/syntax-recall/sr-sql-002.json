@@ -1,0 +1,42 @@
+{
+  "id": "sr-sql-002",
+  "kind": "write",
+  "axis": "syntax-recall",
+  "language": "sql",
+  "tier": 2,
+  "title": "Salary rank within each department",
+  "prompt": "SQLite. Submit exactly one statement - a single SELECT, optionally preceded by a WITH clause (a second, semicolon-separated statement is rejected).\n\nTable:\n  employees(id INTEGER PRIMARY KEY, name TEXT NOT NULL, dept TEXT NOT NULL, salary INTEGER NOT NULL)\n\nReturn one row per employee with the rank of their salary inside their own department:\nthe highest salary in a department ranks 1, and employees paid the same share a rank\nwith no gap left behind them - the next distinct salary down is 2, never 3. Columns,\nnamed exactly: name, dept, rnk. Row order does not matter.\n\nExample - for the rows\n  ('zoe', 'qa', 90), ('kai', 'qa', 90), ('lin', 'qa', 70)\nthe result is  zoe|qa|1, kai|qa|1, lin|qa|2.",
+  "starterCode": "-- one SELECT; columns: name, dept, rnk\n",
+  "softTimeLimitSeconds": 480,
+  "cases": [
+    {
+      "fixture": "CREATE TABLE employees (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL,\n  dept TEXT NOT NULL,\n  salary INTEGER NOT NULL\n);\nINSERT INTO employees (id, name, dept, salary) VALUES\n  (1, 'ana', 'eng', 120),\n  (2, 'dee', 'ops', 80),\n  (3, 'bo', 'eng', 100),\n  (4, 'eli', 'ops', 60),\n  (5, 'cy', 'eng', 90);\n",
+      "expectedRows": [
+        { "name": "ana", "dept": "eng", "rnk": 1 },
+        { "name": "bo", "dept": "eng", "rnk": 2 },
+        { "name": "cy", "dept": "eng", "rnk": 3 },
+        { "name": "dee", "dept": "ops", "rnk": 1 },
+        { "name": "eli", "dept": "ops", "rnk": 2 }
+      ]
+    },
+    {
+      "fixture": "CREATE TABLE employees (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL,\n  dept TEXT NOT NULL,\n  salary INTEGER NOT NULL\n);\nINSERT INTO employees (id, name, dept, salary) VALUES\n  (1, 'fay', 'eng', 90),\n  (2, 'hal', 'eng', 70),\n  (3, 'gus', 'eng', 90),\n  (4, 'ivy', 'ops', 50);\n",
+      "expectedRows": [
+        { "name": "fay", "dept": "eng", "rnk": 1 },
+        { "name": "gus", "dept": "eng", "rnk": 1 },
+        { "name": "hal", "dept": "eng", "rnk": 2 },
+        { "name": "ivy", "dept": "ops", "rnk": 1 }
+      ]
+    },
+    {
+      "fixture": "CREATE TABLE employees (\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL,\n  dept TEXT NOT NULL,\n  salary INTEGER NOT NULL\n);\nINSERT INTO employees (id, name, dept, salary) VALUES\n  (1, 'jo', 'sales', 70),\n  (2, 'mel', 'sales', 40),\n  (3, 'kim', 'sales', 70),\n  (4, 'ned', 'sales', 30),\n  (5, 'lee', 'sales', 70);\n",
+      "expectedRows": [
+        { "name": "jo", "dept": "sales", "rnk": 1 },
+        { "name": "kim", "dept": "sales", "rnk": 1 },
+        { "name": "lee", "dept": "sales", "rnk": 1 },
+        { "name": "mel", "dept": "sales", "rnk": 2 },
+        { "name": "ned", "dept": "sales", "rnk": 3 }
+      ]
+    }
+  ]
+}
