@@ -4,3 +4,6 @@ dist/
 *.db-journal
 *.tsbuildinfo
 .DS_Store
+
+# graphify knowledge-graph caches (built locally by review/analysis agents, never shipped)
+**/graphify-out/
