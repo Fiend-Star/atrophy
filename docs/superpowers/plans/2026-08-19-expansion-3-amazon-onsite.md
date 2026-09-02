@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- PRIVACY (hard law): no behavioral-note text, no personal project codenames (finra/RAMS/ICCR/ETR/Email2Db etc.), no personal stories in ANY tracked file. Behavioral rounds yield zero drills.
+- PRIVACY (hard law): no behavioral-note text, no personal project codenames (the codename list lives in the E3 spec §Non-goals and ONLY there — this plan deliberately does not echo it; sweeps reference codenames by index), no personal stories in ANY tracked file. Behavioral rounds yield zero drills.
 - Expansion-2 traveling law binds verbatim: Java authoring rules, claim gate (violator per claim, sub-1.00, tabled), no-epsilon exactness, determinism (injected clocks — never wall clock), leak discipline (vs aur-p70 + DE Shaw 369 + within-pack), output-cap conventions, roster stamping `shipped expansion-3 (<commit>)`.
 - No Lombok in graded content; every starter compiles.
 - Scratch env for ALL grading (ATROPHY_DB scratch, ATROPHY_NO_SYNC=1); never the real ~/.atrophy.
