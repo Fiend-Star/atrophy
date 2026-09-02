@@ -371,6 +371,14 @@ async function predictDrill(ex: PredictExercise, solutionOverride?: string): Pro
     if (solutionOverride) {
       const prediction = readFileSync(solutionOverride, "utf8");
       const r = await gradePrediction(ex, dir, prediction);
+      // Same rule as codeDrill's scripted branch: `error` means the snippet never ran (a
+      // missing JDK, a timeout, a broken exercise), so there is nothing to grade the user
+      // on - abandon, and drillOnce records nothing. Returning r.credit here (always 0
+      // alongside an error) recorded a 0 the user never earned and moved the rating.
+      if (r.error) {
+        console.log(pc.red(`\n${r.error}`));
+        return makeOutcome(ex, 0, elapsed(), true);
+      }
       return makeOutcome(ex, r.credit, elapsed());
     }
 

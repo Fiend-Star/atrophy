@@ -9,6 +9,7 @@ import type {
   CodeLikeExercise,
   Exercise,
   HarnessExercise,
+  PredictExercise,
   RecallExercise,
   SqlWriteExercise,
 } from "../bank/schema.js";
@@ -570,4 +571,51 @@ describe("previewExercise - recall", () => {
     expect(output).toMatch(/1\/4, 0\.25, 25%/);
     expect(output).not.toContain("Two independent halves multiply.");
   });
+});
+
+describe("runDrill - predict-output via --solution when the snippet never ran", () => {
+  const brokenSnippet: PredictExercise = {
+    id: "cr-py-950",
+    kind: "predict-output",
+    axis: "code-reading",
+    language: "python",
+    tier: 1,
+    title: "broken snippet",
+    prompt: "What does this print?",
+    // Exits non-zero: gradePrediction reports that as `error` (a bank bug or a broken
+    // toolchain), with credit 0.
+    snippet: "import sys\nprint('half')\nsys.exit(3)\n",
+    softTimeLimitSeconds: 120,
+    testTimeoutMs: 15_000,
+  };
+
+  it("abandons instead of recording the 0 that gradePrediction returns alongside an error", async () => {
+    // The interactive branch already abandons on `error`. The scripted branch must too:
+    // returning r.credit (always 0 on error) lets drillOnce record a 0 and move the
+    // unaided rating on evidence that was never about the user - the same invariant the
+    // code kinds' --solution branch keeps (and that "harnessError is never evidence" names).
+    const { lines, restore } = captureLog();
+    let outcome: DrillOutcome;
+    try {
+      outcome = await runDrill(brokenSnippet, solutionFile("half\n"));
+    } finally {
+      restore();
+    }
+    expect(outcome.abandoned).toBe(true);
+    expect(outcome.score).toBe(0);
+    expect(lines.join("\n")).toContain("snippet failed to run");
+  }, 30_000);
+
+  it("still scores a scripted prediction when the snippet ran", async () => {
+    const fine: PredictExercise = { ...brokenSnippet, id: "cr-py-951", snippet: "print('half')\n" };
+    const { restore } = captureLog();
+    let outcome: DrillOutcome;
+    try {
+      outcome = await runDrill(fine, solutionFile("half\n"));
+    } finally {
+      restore();
+    }
+    expect(outcome.abandoned).toBe(false);
+    expect(outcome.score).toBeGreaterThan(0);
+  }, 30_000);
 });
