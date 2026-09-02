@@ -1273,3 +1273,45 @@ describe.skipIf(!hasJdk())("bank integrity - java", () => {
     }
   }, 300_000);
 });
+
+/**
+ * Exercise ids allowed to carry an integral number past 2^53 in `tests`. JSON has no way
+ * to say "this is a float that happens to be integral", so an exercise that genuinely
+ * wants 1e20 as a value goes here - deliberately, in the same commit that adds the value.
+ */
+const UNSAFE_INTEGER_ALLOWLIST = new Set<string>([]);
+
+/**
+ * Every integral number in a `tests` literal past the inclusive bound the Java codec folds at (2^53 itself is exact and allowed).
+ * A JSON literal past +/-2^53 reaches every harness already rounded (CLAUDE.md's number
+ * note: no harness can reject it after the fact), so the parsed bank is the only place
+ * the authoring rule can be enforced.
+ */
+function unsafeIntegerLiterals(value: unknown, path = "value", out: string[] = []): string[] {
+  if (typeof value === "number") {
+    if (Number.isInteger(value) && Math.abs(value) > 2 ** 53) out.push(`${path} = ${value}`);
+  } else if (Array.isArray(value)) {
+    value.forEach((v, i) => unsafeIntegerLiterals(v, `${path}[${i}]`, out));
+  } else if (value && typeof value === "object") {
+    for (const [k, v] of Object.entries(value)) unsafeIntegerLiterals(v, `${path}.${k}`, out);
+  }
+  return out;
+}
+
+describe("bank integrity - numeric test literals", () => {
+  it("keeps every integer in a tests literal within +/-2^53 (anything past it was already rounded by JSON.parse)", () => {
+    const offenders: string[] = [];
+    for (const ex of bank) {
+      if (!("tests" in ex) || !Array.isArray(ex.tests) || UNSAFE_INTEGER_ALLOWLIST.has(ex.id)) continue;
+      for (const [i, t] of ex.tests.entries()) {
+        for (const hit of unsafeIntegerLiterals(t, `${ex.id} tests[${i}]`)) offenders.push(hit);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("fires on 2^53 + 2 and stays quiet on 2^53 itself, on non-integral floats, and on safe integers", () => {
+    expect(unsafeIntegerLiterals({ args: [9007199254740994], expected: 1 })).toEqual(["value.args[0] = 9007199254740994"]);
+    expect(unsafeIntegerLiterals({ args: [9007199254740992, 1.5, -3], expected: [1e15] })).toEqual([]);
+  });
+});

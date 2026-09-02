@@ -1061,3 +1061,18 @@ describe.skipIf(!hasJdk())("grade - java testCode with a null check name", () =>
     expect(r.failures[0]?.error).toMatch(/unnamed/);
   }, 90_000);
 });
+
+describe("parseMarker - a truncated run whose marker survived still scores", () => {
+  it("scores the marker rather than blaming the cap when the marker line parsed cleanly", () => {
+    // The cap message is for a marker the cap ate. A run that reached the cap but still
+    // printed a clean marker (large diagnostic output before it) is a scored result.
+    const r = parseMarker(
+      fakeRunResult({ stdout: 'noise\nATROPHY_RESULT {"passed":2,"total":3,"failures":[]}', truncated: true }),
+      3,
+      15_000,
+    );
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(2);
+    expect(r.total).toBe(3);
+  });
+});
