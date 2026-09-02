@@ -87,3 +87,18 @@ describe("run - output cap truncation flag", () => {
     expect(r.truncated).toBe(false);
   });
 });
+
+describe("run - output cap boundary", () => {
+  it("keeps output of exactly the cap intact, and still flags it: truncated means reached, not necessarily lost", async () => {
+    const cap = 256 * 1024;
+    const r = await run(process.execPath, ["-e", `process.stdout.write('x'.repeat(${cap}))`], {
+      cwd: process.cwd(),
+      timeoutMs: 15_000,
+    });
+    // Nothing was dropped - the runner appends whole chunks while below the cap and only
+    // drops what arrives after it - yet the flag is set: `truncated` means "reached the
+    // cap", which is exactly why grader.ts's message says "reached" rather than "exceeded".
+    expect(r.stdout.length).toBe(cap);
+    expect(r.truncated).toBe(true);
+  });
+});

@@ -947,3 +947,117 @@ describe("solutionFileName", () => {
     expect(named("shell")).toBe("solution.sh");
   });
 });
+
+describe("grade - bounded failure payloads: a huge *return value* cannot zero earned cases", () => {
+  // The hardening bounded thrown messages in every language and values in Java only.
+  // A wrong answer that is merely enormous (a 300KB string where a number was expected)
+  // is the same hazard on the python/node paths: unbounded, it lands in the failure's
+  // `actual`, blows the 256KB cap before the marker, and voids the cases that passed.
+  it("python: elides a 300KB actual so the passing case still counts and the marker survives", async () => {
+    const dir = scratch();
+    const mixed: CodeExercise = {
+      ...pyEx,
+      id: "sr-py-915",
+      functionName: "big_or_double",
+      starterCode: "def big_or_double(x):\n    pass\n",
+      tests: [
+        { args: [1], expected: 2 },
+        { args: [0], expected: 0 },
+      ],
+    };
+    writeSolution(dir, mixed, "def big_or_double(x):\n    if x == 0:\n        return 'z' * 300000\n    return x * 2\n");
+    const r = await grade(mixed, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(1);
+    const f = r.failures.find((x) => x.index === 1);
+    expect(typeof f?.actual).toBe("string");
+    expect((f?.actual as string).length).toBeLessThan(1200);
+    expect(f?.actual).toMatch(/more chars\)$/);
+  }, 20_000);
+
+  it("javascript: elides a 300KB actual the same way", async () => {
+    const dir = scratch();
+    const mixed: CodeExercise = {
+      ...jsEx,
+      id: "sr-js-915",
+      functionName: "bigOrDouble",
+      starterCode: "function bigOrDouble(x) {}\nmodule.exports = { bigOrDouble };\n",
+      tests: [
+        { args: [1], expected: 2 },
+        { args: [0], expected: 0 },
+      ],
+    };
+    writeSolution(
+      dir,
+      mixed,
+      "function bigOrDouble(x) { return x === 0 ? 'z'.repeat(300000) : x * 2; }\nmodule.exports = { bigOrDouble };\n",
+    );
+    const r = await grade(mixed, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(1);
+    const f = r.failures.find((x) => x.index === 1);
+    expect(typeof f?.actual).toBe("string");
+    expect((f?.actual as string).length).toBeLessThan(1200);
+    expect(f?.actual).toMatch(/more chars\)$/);
+  }, 20_000);
+
+  it("python: bounds a module-load error so a broken import reads as one failure, not a capped marker", async () => {
+    const dir = scratch();
+    writeSolution(dir, pyEx, "raise RuntimeError('z' * 300000)\n");
+    const r = await grade(pyEx, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(0);
+    expect(r.failures[0]?.index).toBe(-1);
+    expect((r.failures[0]?.error as string).length).toBeLessThanOrEqual(2000);
+  }, 20_000);
+
+  it("javascript: bounds a module-load error the same way", async () => {
+    const dir = scratch();
+    writeSolution(dir, jsEx, "throw new Error('z'.repeat(300000));\n");
+    const r = await grade(jsEx, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(0);
+    expect(r.failures[0]?.index).toBe(-1);
+    expect((r.failures[0]?.error as string).length).toBeLessThanOrEqual(2000);
+  }, 20_000);
+});
+
+describe("grade - python folds an integral float into its int only within +/-2^53 (the Java codec's bound)", () => {
+  it("2**53 itself folds and passes against the int; 2**53 + 2 stays a float and still mismatches", async () => {
+    const dir = scratch();
+    const edge: CodeExercise = {
+      ...pyEx,
+      id: "sr-py-916",
+      functionName: "as_float",
+      starterCode: "def as_float(x):\n    pass\n",
+      tests: [
+        { args: [0], expected: 9007199254740992 },
+        { args: [1], expected: 9007199254740994 },
+      ],
+    };
+    writeSolution(dir, edge, "def as_float(x):\n    return float(2 ** 53) if x == 0 else float(2 ** 53 + 2)\n");
+    const r = await grade(edge, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.passed).toBe(1);
+    expect(r.failures.map((f) => f.index)).toEqual([1]);
+  }, 20_000);
+});
+
+describe.skipIf(!hasJdk())("grade - java testCode with a null check name", () => {
+  it("reports rather than crashing in report() when a harness passes null as a check name", async () => {
+    const dir = scratch();
+    const nullName: HarnessExercise = {
+      ...harnessEx,
+      id: "conc-java-905",
+      totalChecks: 1,
+      testCode:
+        "public class Harness { public static void main(String[] a) { Atrophy.plan(1); Atrophy.check(null, false); Atrophy.report(); } }",
+    };
+    writeSolution(dir, nullName, nullName.starterCode);
+    const r = await grade(nullName, dir);
+    expect(r.harnessError).toBeUndefined();
+    expect(r.total).toBe(1);
+    expect(r.passed).toBe(0);
+    expect(r.failures[0]?.error).toMatch(/unnamed/);
+  }, 90_000);
+});

@@ -26,7 +26,9 @@ public final class Atrophy {
     public static synchronized void check(String name, boolean ok) {
         ran++;
         if (ok) passed++;
-        else failures.add(bounded(name));
+        // A null name would reach esc() in report() and NPE there, printing no marker at
+        // all - an authoring slip must read as the failed check it is, not as a harness error.
+        else failures.add(bounded(name == null ? "(unnamed check)" : name));
     }
 
     /** A failure name beyond this is elided - see {@link #bounded}. */

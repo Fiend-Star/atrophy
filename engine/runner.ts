@@ -18,7 +18,8 @@ export interface RunOptions {
   env?: Record<string, string>;
 }
 
-const MAX_OUTPUT_BYTES = 256 * 1024;
+/** Output cap per stream; grader.ts imports this so its cap message and shell cap-stamp cannot drift. */
+export const MAX_OUTPUT_BYTES = 256 * 1024;
 
 /**
  * Run a command in a subprocess with a hard timeout and capped output.

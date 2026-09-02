@@ -22,7 +22,7 @@ import {
   javaResourceDir,
   missingJdkHint,
 } from "./javatool.js";
-import { run, type RunResult } from "./runner.js";
+import { MAX_OUTPUT_BYTES, run, type RunResult } from "./runner.js";
 
 export interface TestFailure {
   index: number;
@@ -77,7 +77,7 @@ except Exception:
     print("ATROPHY_RESULT " + json.dumps({
         "passed": 0, "total": ${ex.tests.length},
         "failures": [{"index": -1, "args": [], "expected": None,
-                      "error": traceback.format_exc(limit=3)}]
+                      "error": traceback.format_exc(limit=3)[:2000]}]
     }))
     sys.exit(0)
 
@@ -108,6 +108,16 @@ def normalize(v):
 def canon(v):
     return json.dumps(normalize(v), sort_keys=True, default=str)
 
+# Mirrors Harness.java's bounded(): one failure value's JSON form beyond this is elided
+# (display only - the comparison above is untouched). A merely enormous wrong answer
+# must not be able to blow the output cap before the marker and void the cases that passed.
+_MAX_VALUE_CHARS = 1024
+def bounded(v):
+    s = json.dumps(normalize(v), sort_keys=True, default=str)
+    if len(s) <= _MAX_VALUE_CHARS:
+        return v
+    return s[:_MAX_VALUE_CHARS] + "... (%d more chars)" % (len(s) - _MAX_VALUE_CHARS)
+
 failures = []
 passed = 0
 for i, t in enumerate(tests):
@@ -117,14 +127,14 @@ for i, t in enumerate(tests):
         if canon(actual) == canon(t["expected"]):
             passed += 1
         else:
-            failures.append({"index": i, "args": t["args"],
-                             "expected": t["expected"], "actual": actual})
+            failures.append({"index": i, "args": bounded(t["args"]),
+                             "expected": bounded(t["expected"]), "actual": bounded(actual)})
     except Exception:
         # limit=2 bounds the traceback's *frames*, not its characters - the exception's own
         # message (e.g. from a submitted solution's own raise) is effectively attacker-
         # controlled and unbounded on its own. [:2000] mirrors the budget describeThrowable
         # uses in Harness.java, so a single huge throw cannot approach the output cap.
-        failures.append({"index": i, "args": t["args"], "expected": t["expected"],
+        failures.append({"index": i, "args": bounded(t["args"]), "expected": bounded(t["expected"]),
                          "error": traceback.format_exc(limit=2)[:2000]})
 
 result = {"passed": passed, "total": len(tests), "failures": failures}
@@ -151,12 +161,21 @@ try {
     throw new Error(${JSON.stringify(ex.functionName)} + " is not exported (keep the module.exports line)");
   }
 } catch (err) {
-  emit({ passed: 0, total, failures: [{ index: -1, args: [], expected: null, error: String(err && err.stack || err) }] });
+  emit({ passed: 0, total, failures: [{ index: -1, args: [], expected: null, error: String(err && err.stack || err).slice(0, 2000) }] });
   process.exit(0);
 }
 
 const tests = JSON.parse(${JSON.stringify(tests)});
 const canon = (v) => JSON.stringify(sortKeys(v));
+// Mirrors Harness.java's bounded(): one failure value's JSON form beyond this is elided
+// (display only - the comparison is untouched), so a merely enormous wrong answer cannot
+// blow the output cap before the marker and void the cases that passed.
+const MAX_VALUE_CHARS = 1024;
+const bounded = (v) => {
+  const s = JSON.stringify(v);
+  if (s === undefined || s.length <= MAX_VALUE_CHARS) return v;
+  return s.slice(0, MAX_VALUE_CHARS) + "... (" + (s.length - MAX_VALUE_CHARS) + " more chars)";
+};
 function sortKeys(v) {
   if (Array.isArray(v)) return v.map(sortKeys);
   if (v && typeof v === "object") {
@@ -172,13 +191,13 @@ tests.forEach((t, i) => {
     let actual = fn(...t.args);
     actual = actual === undefined ? null : JSON.parse(JSON.stringify(actual));
     if (canon(actual) === canon(t.expected)) passed += 1;
-    else failures.push({ index: i, args: t.args, expected: t.expected, actual });
+    else failures.push({ index: i, args: bounded(t.args), expected: bounded(t.expected), actual: bounded(actual) });
   } catch (err) {
     // .slice(0, 3) bounds the *lines* kept, not their length - the error's own message
     // (e.g. from a submitted solution's own throw) is effectively attacker-controlled and
     // unbounded on its own. The trailing .slice(0, 2000) mirrors describeThrowable's budget
     // in Harness.java, so a single huge throw cannot approach the output cap.
-    failures.push({ index: i, args: t.args, expected: t.expected, error: String(err && err.stack || err).split("\\n").slice(0, 3).join("\\n").slice(0, 2000) });
+    failures.push({ index: i, args: bounded(t.args), expected: bounded(t.expected), error: String(err && err.stack || err).split("\\n").slice(0, 3).join("\\n").slice(0, 2000) });
   }
 });
 emit({ passed, total, failures });
@@ -407,13 +426,14 @@ export function parseMarker(result: RunResult, total: number, timeoutMs: number)
 }
 
 /**
- * runner.ts stops appending output once it holds 256 KB, and the cap is private to that
- * module - so it is mirrored here rather than imported. A capped run is the one mismatch
+ * runner.ts stops appending output once it holds MAX_OUTPUT_BYTES (256 KB); the constant
+ * is imported from there so the two can never drift apart (as a hand-mirrored copy, a
+ * bumped runner cap would have left every "256KB" message silently wrong). A capped run is the one mismatch
  * that is not about the answer (a runaway loop's first 256 KB will not equal anything an
  * exercise expects), so the failure has to say so instead of reading as a mystery.
  * `grader.shell.test.ts` pins the mirror against a real over-cap run.
  */
-const RUNNER_OUTPUT_CAP = 256 * 1024;
+const RUNNER_OUTPUT_CAP = MAX_OUTPUT_BYTES;
 
 /** Did the runner cut this output off? Its cap check runs *before* appending a chunk. */
 export function shellOutputTruncated(stdout: string): boolean {
