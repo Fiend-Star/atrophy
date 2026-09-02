@@ -97,6 +97,14 @@ export function stagedFileKeyProblem(key: string): string | undefined {
 }
 
 /**
+ * Upper bound on one shell case's expectedStdout. gradeShell compares the *capped* stdout
+ * (runner.ts stops appending at 256 KB), so an expectation that large could never be met -
+ * a byte-perfect answer would grade wrong. 64 KB is ~300x the largest shipped case (191
+ * chars, hrt pack) and still a quarter of the cap.
+ */
+export const SHELL_EXPECTED_STDOUT_MAX_CHARS = 64 * 1024;
+
+/**
  * One shell case: the files staged beside the script, the argv it is called with, and what
  * running it must produce. Each case gets a fresh directory, so `files` is the whole world
  * the script sees.
@@ -108,7 +116,9 @@ export const shellCaseSchema = z
     /** Arguments passed to the script. */
     args: z.array(z.string()).optional(),
     /** Exact stdout the script must print. */
-    expectedStdout: z.string(),
+    expectedStdout: z.string().max(SHELL_EXPECTED_STDOUT_MAX_CHARS, {
+      message: `expectedStdout is over ${SHELL_EXPECTED_STDOUT_MAX_CHARS} characters - the grader compares stdout after runner.ts's 256KB cap, so this case could never pass`,
+    }),
     /** Exit status the script must end on; absent means 0. */
     expectedExitCode: z.number().int().min(0).max(255).optional(),
   })

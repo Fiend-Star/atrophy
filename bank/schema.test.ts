@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { BankError, exerciseSchema, isHarness, isShellWrite, isSqlWrite, JVM_KINDS, LANGUAGES, loadBank, loadBankDetailed, parseExercise, spawnsShell, totalUnits, type CodeExercise, type HarnessExercise, type RecallExercise } from "./schema.js";
+import { BankError, exerciseSchema, isHarness, isShellWrite, isSqlWrite, JVM_KINDS, LANGUAGES, loadBank, SHELL_EXPECTED_STDOUT_MAX_CHARS, loadBankDetailed, parseExercise, spawnsShell, totalUnits, type CodeExercise, type HarnessExercise, type RecallExercise } from "./schema.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 
@@ -594,5 +594,21 @@ describe("loadBankDetailed", () => {
       rmSync(a, { recursive: true, force: true });
       rmSync(b, { recursive: true, force: true });
     }
+  });
+});
+
+describe("shell write - expectedStdout size bound", () => {
+  it("rejects a case whose expectedStdout could never survive the grader's output cap", () => {
+    const huge = "x".repeat(SHELL_EXPECTED_STDOUT_MAX_CHARS + 1);
+    expect(() =>
+      exerciseSchema.parse(shellWrite({ shellCases: [{ ...shellCases[0], expectedStdout: huge }, shellCases[1]] })),
+    ).toThrow(/expectedStdout/);
+  });
+
+  it("accepts one right at the bound", () => {
+    const atBound = "x".repeat(SHELL_EXPECTED_STDOUT_MAX_CHARS);
+    expect(() =>
+      exerciseSchema.parse(shellWrite({ shellCases: [{ ...shellCases[0], expectedStdout: atBound }, shellCases[1]] })),
+    ).not.toThrow();
   });
 });
