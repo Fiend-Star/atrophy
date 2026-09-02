@@ -457,12 +457,12 @@ describe("checkConfig", () => {
 
   it("reports the exact drill count for a track that matches a discovered pack", () => {
     const pack = mkdtempSync(join(tmpdir(), "atrophy-doc-cfg-pack-"));
-    writeFileSync(join(pack, "pack.json"), JSON.stringify({ name: "aurora" }));
+    writeFileSync(join(pack, "pack.json"), JSON.stringify({ name: "alpha" }));
     writeExercise(pack, "sr-py-101"); // exactly one drill - pins the count in the assertion below
     try {
-      const r = checkConfig(base, [pack], envWithConfig(JSON.stringify({ track: "aurora" })));
+      const r = checkConfig(base, [pack], envWithConfig(JSON.stringify({ track: "alpha" })));
       expect(r.status).toBe("pass");
-      expect(r.detail).toContain("track: aurora (1 drills)");
+      expect(r.detail).toContain("track: alpha (1 drills)");
     } finally {
       rmSync(pack, { recursive: true, force: true });
     }
@@ -471,10 +471,10 @@ describe("checkConfig", () => {
   it("warns and names every dir when the configured track name is claimed by more than one pack", () => {
     const packA = mkdtempSync(join(tmpdir(), "atrophy-doc-cfg-packA-"));
     const packB = mkdtempSync(join(tmpdir(), "atrophy-doc-cfg-packB-"));
-    writeFileSync(join(packA, "pack.json"), JSON.stringify({ name: "aurora" }));
-    writeFileSync(join(packB, "pack.json"), JSON.stringify({ name: "aurora" }));
+    writeFileSync(join(packA, "pack.json"), JSON.stringify({ name: "alpha" }));
+    writeFileSync(join(packB, "pack.json"), JSON.stringify({ name: "alpha" }));
     try {
-      const r = checkConfig(base, [packA, packB], envWithConfig(JSON.stringify({ track: "aurora" })));
+      const r = checkConfig(base, [packA, packB], envWithConfig(JSON.stringify({ track: "alpha" })));
       expect(r.status).toBe("warn");
       expect(r.detail).toContain(packA);
       expect(r.detail).toContain(packB);

@@ -178,7 +178,7 @@ it - no flags to remember every time:
 ```sh
 atrophy setup                         # interactive: pick languages, pick a track
 atrophy setup --languages java,sql    # non-interactive: set the language allowlist directly
-atrophy drill --track aurora          # focus this one run on a single pack, without touching config
+atrophy drill --track mypack          # focus this one run on a single pack, without touching config
 ```
 
 Two rules worth knowing: an explicit `--lang` on `drill`/`baseline` always

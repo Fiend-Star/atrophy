@@ -99,8 +99,8 @@ export function stagedFileKeyProblem(key: string): string | undefined {
 /**
  * Upper bound on one shell case's expectedStdout. gradeShell compares the *capped* stdout
  * (runner.ts stops appending at 256 KB), so an expectation that large could never be met -
- * a byte-perfect answer would grade wrong. 64 KB is ~300x the largest shipped case (191
- * chars, hrt pack) and still a quarter of the cap.
+ * a byte-perfect answer would grade wrong. 64 KB is ~300x the largest case any shipped
+ * pack has needed (191 chars) and still a quarter of the cap.
  */
 export const SHELL_EXPECTED_STDOUT_MAX_CHARS = 64 * 1024;
 
@@ -269,7 +269,7 @@ const exerciseUnion = z.discriminatedUnion("kind", [
  * carries `cases` and only a shell write carries `shellCases`; every other write/fix
  * carries `tests` + `functionName`. Among the *graded-code* kinds both sql and shell are
  * write-only: there is nothing to "fix" in a query the user never wrote, a query has no
- * stdout to predict, and the corpus ships no shell fix or predict-output at all - a sql
+ * stdout to predict, and no shell content needs a fix or predict-output kind at all - a sql
  * or shell `recall` question needs none of this and sits outside the refinement entirely.
  * A cloze's per-blank answers are the other such rule: their count only means something
  * against the snippet.

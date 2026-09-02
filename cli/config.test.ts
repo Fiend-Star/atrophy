@@ -52,8 +52,8 @@ function foldsCase(dir: string): boolean {
 
 describe("readConfig", () => {
   it("reads packs and tolerates a UTF-8 BOM", () => {
-    withConfig("\uFEFF" + JSON.stringify({ packs: ["C:/packs/deshaw"] }));
-    expect(readConfig().packs).toEqual(["C:/packs/deshaw"]);
+    withConfig("\uFEFF" + JSON.stringify({ packs: ["C:/packs/gamma"] }));
+    expect(readConfig().packs).toEqual(["C:/packs/gamma"]);
   });
   it("returns {} for missing or broken config", () => {
     process.env.ATROPHY_CONFIG = join(tmpdir(), "nope", "config.json");
@@ -120,7 +120,7 @@ describe("packDirs", () => {
 
   it("ignores a malformed config packs value instead of spreading it per character", () => {
     // hand-edited config: a bare string where an array belongs
-    const env = { ATROPHY_CONFIG: configFile(JSON.stringify({ packs: "C:/packs/deshaw" })) };
+    const env = { ATROPHY_CONFIG: configFile(JSON.stringify({ packs: "C:/packs/gamma" })) };
     expect(packDirs(env)).toEqual([]);
   });
 
@@ -147,7 +147,7 @@ describe("configLanguages / configTrack", () => {
     expect(configLanguages({ ATROPHY_CONFIG: configFile(JSON.stringify({ languages: [] })) })).toEqual([]);
   });
   it("track is trimmed and lowercased; blank means undefined", () => {
-    expect(configTrack({ ATROPHY_CONFIG: configFile(JSON.stringify({ track: "  Aurora " })) })).toBe("aurora");
+    expect(configTrack({ ATROPHY_CONFIG: configFile(JSON.stringify({ track: "  Alpha " })) })).toBe("alpha");
     expect(configTrack({ ATROPHY_CONFIG: configFile(JSON.stringify({ track: "   " })) })).toBeUndefined();
     expect(configTrack({ ATROPHY_CONFIG: configFile("{}") })).toBeUndefined();
   });
@@ -158,8 +158,8 @@ describe("configLanguages / configTrack", () => {
     expect(configTrack({ ATROPHY_CONFIG: configFile(JSON.stringify({ track: " ALL " })) })).toBeUndefined();
   });
   it("falls back to process.env when called with no argument", () => {
-    withConfig(JSON.stringify({ languages: ["python"], track: "Aurora" }));
+    withConfig(JSON.stringify({ languages: ["python"], track: "Alpha" }));
     expect(configLanguages()).toEqual(["python"]);
-    expect(configTrack()).toBe("aurora");
+    expect(configTrack()).toBe("alpha");
   });
 });

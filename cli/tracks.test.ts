@@ -21,10 +21,10 @@ function mkTemp(basename: string): string {
 describe("trackName", () => {
   it("pack.json name wins; basename (lowercased) is the fallback", () => {
     const withMeta = mkTemp("MyPack");
-    writeFileSync(join(withMeta, "pack.json"), JSON.stringify({ name: "aurora", description: "x" }));
-    const bare = mkTemp("Atrophy-Pack-HRT");
-    expect(trackName(withMeta)).toBe("aurora");
-    expect(trackName(bare)).toBe("atrophy-pack-hrt");
+    writeFileSync(join(withMeta, "pack.json"), JSON.stringify({ name: "alpha", description: "x" }));
+    const bare = mkTemp("Atrophy-Pack-BETA");
+    expect(trackName(withMeta)).toBe("alpha");
+    expect(trackName(bare)).toBe("atrophy-pack-beta");
   });
 
   it("invalid pack.json (bad slug, reserved name, malformed JSON) falls back to basename", () => {
@@ -62,12 +62,12 @@ describe("resolveTracks", () => {
   it("adds one track per pack dir, in order, after base", () => {
     const p1 = mkTemp("Pack-One");
     const p2 = mkTemp("Pack-Two");
-    writeFileSync(join(p2, "pack.json"), JSON.stringify({ name: "aurora" }));
+    writeFileSync(join(p2, "pack.json"), JSON.stringify({ name: "alpha" }));
     const t = resolveTracks("/bank", [p1, p2]);
     expect(t).toEqual([
       { name: "base", dir: "/bank", isBase: true },
       { name: "pack-one", dir: p1, isBase: false },
-      { name: "aurora", dir: p2, isBase: false },
+      { name: "alpha", dir: p2, isBase: false },
     ]);
   });
 
@@ -79,13 +79,13 @@ describe("resolveTracks", () => {
 describe("ambiguousTracks / findTrack", () => {
   const tracks: Track[] = [
     { name: "base", dir: "/b", isBase: true },
-    { name: "aurora", dir: "/p1", isBase: false },
-    { name: "aurora", dir: "/p2", isBase: false },
+    { name: "alpha", dir: "/p1", isBase: false },
+    { name: "alpha", dir: "/p2", isBase: false },
   ];
 
   it("findTrack matches case-insensitively and throws on ambiguity", () => {
-    expect(ambiguousTracks(tracks)).toEqual(["aurora"]);
-    expect(() => findTrack(tracks, "AURORA")).toThrow(/ambiguous/);
+    expect(ambiguousTracks(tracks)).toEqual(["alpha"]);
+    expect(() => findTrack(tracks, "ALPHA")).toThrow(/ambiguous/);
     expect(findTrack(tracks, "base")!.isBase).toBe(true);
   });
 
