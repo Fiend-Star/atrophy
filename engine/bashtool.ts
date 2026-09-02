@@ -8,7 +8,7 @@ import { delimiter, dirname, join } from "node:path";
  * with one hazard java does not have: on Windows the *name* `bash` resolves to the
  * wrong program.
  *
- * P1 (scout probe): `bash.exe` on PATH is `C:\WINDOWS\system32\bash.exe`, the WSL
+ * Probed on a real host: `bash.exe` on PATH is `C:\WINDOWS\system32\bash.exe`, the WSL
  * launcher; Git Bash is not on PATH at all. So discovery on win32 never falls back to
  * a bare name - it derives the real path or gives up (and a bash-less host simply
  * hides the shell drills that need one; see MIN_BASH_MAJOR).
@@ -38,7 +38,7 @@ const WELL_KNOWN_WIN32 = [
 const POSIX_BASH = "/bin/bash";
 
 /**
- * The set of external commands a shell drill may assume: P14's inventory of Git Bash's
+ * The set of external commands a shell drill may assume: a frozen inventory of Git Bash's
  * `usr/bin`, which is the scarcer of the two toolchains CI runs (the ubuntu leg has GNU
  * coreutils, so anything here resolves there too). A `command not found` naming one of
  * these is a broken toolchain - a harnessError, never a score against the user - while
@@ -70,17 +70,17 @@ export const PINNED_TOOLS: readonly string[] = Object.freeze([
 export function SHELL_ENV(bashPath: string, env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const tail = inheritedPath(env);
   return {
-    // P6: unpinned collation makes `sort` and glob order host-dependent.
+    // Unpinned collation makes `sort` and glob order host-dependent.
     LC_ALL: "C",
     LANG: "C",
-    // P7: unpinned, `date` prints whatever zone the host sits in. The pin fixes the
+    // Unpinned, `date` prints whatever zone the host sits in. The pin fixes the
     // instant but not the *name* - msys prints "GMT" where GNU coreutils prints "UTC"
     // for the same TZ=UTC - which is why fixtures are barred from `date +%Z` outright.
     TZ: "UTC",
-    // P11: msys rewrites `/tmp/x`-shaped argv into a Windows path before the child sees it.
+    // msys rewrites `/tmp/x`-shaped argv into a Windows path before the child sees it.
     MSYS_NO_PATHCONV: "1",
     MSYS2_ARG_CONV_EXCL: "*",
-    // P2/P3: without the bash dir first, a script launched from a PowerShell parent loses
+    // Without the bash dir first, a script launched from a PowerShell parent loses
     // 33 of the 36 PINNED_TOOLS to `command not found` - and still exits 0, a silent,
     // empty-output pass. The three survivors are the real argument for pinning rather
     // than merely appending: `sort` and `find` resolve to C:\WINDOWS\system32\{sort,find}.exe,
@@ -166,7 +166,7 @@ function probeGitExecPath(): string | undefined {
 }
 
 /**
- * P16: `git --exec-path` answers `<root>/mingw64/libexec/git-core`, so the install root
+ * `git --exec-path` answers `<root>/mingw64/libexec/git-core`, so the install root
  * is three levels up and bash sits at `<root>\usr\bin\bash.exe`. This is the robust rule -
  * git is already a hard dependency of anyone using this tool, so it finds Git Bash
  * wherever scoop, winget, or a custom prefix put it.
@@ -202,7 +202,7 @@ export function resolveBash(deps: Partial<BashResolveDeps> = {}): BashDiscovery 
     }
     const wellKnown = WELL_KNOWN_WIN32.find(exists);
     if (wellKnown) return { command: wellKnown, rule: "well-known install" };
-    // Deliberately no PATH fallback: P1.
+    // Deliberately no PATH fallback: on Windows the bare name is the WSL launcher.
     return undefined;
   }
 

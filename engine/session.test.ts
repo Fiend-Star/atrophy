@@ -296,8 +296,9 @@ const sqlEx: SqlWriteExercise = {
 describe("runDrill - sql", () => {
   it("grades the solution file the session generates, header comment and all", async () => {
     // The header is not decoration: it is prepended to the file handed straight to
-    // db.prepare(). Every non-python language used to get "//", which SQLite rejects -
-    // so the drill would have died on its own header before reading the query.
+    // db.prepare(). A sql drill must not get the "//" prefix the other non-python languages
+    // use: SQLite rejects it, and the drill would die on its own header before reading the
+    // query.
     // Two answers: the first Enter trips the "file hasn't changed" guard, the second
     // submits the untouched starter.
     const { outcome, output } = await driveDrill(sqlEx, ["", ""]);

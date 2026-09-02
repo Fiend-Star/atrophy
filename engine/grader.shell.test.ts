@@ -63,7 +63,7 @@ function solve(ex: ShellWriteExercise, script: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Pure helpers: comparison, failure naming, the P2 classifier. No bash, no spawn,
+// Pure helpers: comparison, failure naming, the missing-tools classifier. No bash, no spawn,
 // so these run on every host - including the ones the suites below skip.
 // ---------------------------------------------------------------------------
 
@@ -134,7 +134,7 @@ describe("shellCaseFailure - naming", () => {
   });
 });
 
-describe("missingPinnedTools - the P2 broken-toolchain signature", () => {
+describe("missingPinnedTools - the broken-toolchain signature", () => {
   it("names a pinned tool bash could not find", () => {
     expect(missingPinnedTools("bash: grep: command not found")).toEqual(["grep"]);
     expect(missingPinnedTools("solution.sh: line 3: sort: command not found\n")).toEqual(["sort"]);
@@ -374,7 +374,7 @@ describe.skipIf(!hasBash())("shell grading - broken toolchain is never a score",
 
   it("a failing case that lost a pinned tool voids the attempt", async () => {
     // A bogus (non-empty) PATH is the needle: an *empty* one makes bash say "No such
-    // file or directory" instead. This is P2's shape - the tool is gone, the case
+    // file or directory" instead. This is the broken-toolchain shape - the tool is gone, the case
     // cannot pass, and nothing about that is evidence about the user.
     const r = await grade(topThree, solve(topThree, "PATH=/nonexistent sort in.txt\n"));
     expect(r.harnessError).toBeDefined();
@@ -437,7 +437,7 @@ describe.skipIf(!hasBash())("shell grading - the pinned environment", () => {
   });
 
   it("the pinned tools all resolve under that PATH", async () => {
-    // P2's real failure mode was 33 of 36 tools missing while the script still
+    // The real-world failure mode was 33 of 36 tools missing while the script still
     // exited 0. If the pin ever slips, this names exactly which tools went.
     const bash = bashCommand()!;
     const d = mkdtempSync(join(tmpdir(), "atrophy-shell-path-"));

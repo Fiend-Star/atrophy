@@ -24,7 +24,7 @@ const noGit = () => undefined;
 const WIN_DEFAULT = "C:\\Program Files\\Git\\usr\\bin\\bash.exe";
 const WIN_X86 = "C:\\Program Files (x86)\\Git\\usr\\bin\\bash.exe";
 const GIT_EXEC_PATH = "C:/Program Files/Git/mingw64/libexec/git-core";
-/** What rule 2 must derive from GIT_EXEC_PATH: up three, then usr/bin/bash.exe (P16). */
+/** What rule 2 must derive from GIT_EXEC_PATH: up three, then usr/bin/bash.exe. */
 const DERIVED = join(dirname(dirname(dirname(GIT_EXEC_PATH))), "usr", "bin", "bash.exe");
 
 describe("parseBashMajor", () => {
@@ -98,7 +98,7 @@ describe("discovery order (win32)", () => {
       .toEqual({ command: "nope", rule: "$ATROPHY_BASH" });
   });
 
-  it("derives Git Bash from `git --exec-path` (P16): up three, then usr/bin/bash.exe", () => {
+  it("derives Git Bash from `git --exec-path`: up three, then usr/bin/bash.exe", () => {
     const found = resolveBash({
       platform: "win32",
       env: {},
@@ -142,7 +142,7 @@ describe("discovery order (win32)", () => {
       .toBe(WIN_DEFAULT);
   });
 
-  it("never falls back to bare `bash` on win32 (P1: that is the WSL launcher)", () => {
+  it("never falls back to bare `bash` on win32 (that is the WSL launcher)", () => {
     expect(resolveBash({ platform: "win32", env: {}, exists: noneExist, gitExecPath: noGit })).toBeUndefined();
   });
 });
@@ -187,7 +187,7 @@ describe("SHELL_ENV", () => {
     expect(env.MSYS2_ARG_CONV_EXCL).toBe("*");
   });
 
-  it("pins PATH with the bash dir FIRST, then the inherited tail (P2/P3)", () => {
+  it("pins PATH with the bash dir FIRST, then the inherited tail", () => {
     const env = SHELL_ENV(bash, { PATH: `/usr/bin${delimiter}/bin` });
     expect(env.PATH).toBe(`${dirname(bash)}${delimiter}/usr/bin${delimiter}/bin`);
   });
@@ -226,7 +226,7 @@ describe("PINNED_TOOLS", () => {
     expect(Object.isFrozen(PINNED_TOOLS)).toBe(true);
     expect(new Set(PINNED_TOOLS).size).toBe(PINNED_TOOLS.length);
   });
-  it("excludes the tools Git Bash does not ship (P14)", () => {
+  it("excludes the tools Git Bash does not ship", () => {
     for (const absent of ["jq", "python", "curl", "rev"]) expect(PINNED_TOOLS).not.toContain(absent);
   });
 });
@@ -292,7 +292,7 @@ describe.skipIf(!hasBash())("the real host's bash", () => {
     expect(major!).toBeGreaterThanOrEqual(MIN_BASH_MAJOR);
   });
 
-  it("resolves every PINNED_TOOL through SHELL_ENV (P3 - unpinned, P2 is a silent exit 0)", async () => {
+  it("resolves every PINNED_TOOL through SHELL_ENV (unpinned, a missing tool is a silent exit 0)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "atrophy-bashenv-"));
     try {
       const bash = bashCommand()!;

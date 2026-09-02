@@ -8,7 +8,7 @@ import { availableAxes } from "../engine/select.js";
 /**
  * README's "The five skills" table (and the paragraphs around it) claims things about
  * what the built-in bank offers per axis and per --lang. It drifted out from under the
- * real selection behavior twice during Plan C (F1: Java landed, F4: SQL landed) because
+ * real selection behavior twice as languages were added (when Java landed, then SQL) because
  * nothing checked the table against the content it describes. This computes the same
  * facts from the built-in bank + generator registry on every run, so a third drift fails
  * loudly here instead of shipping silently.

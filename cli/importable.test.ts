@@ -143,7 +143,7 @@ describe("cli/index.ts is import-safe", () => {
   });
 });
 
-describe("language-mix wiring (spec E1)", () => {
+describe("language-mix wiring", () => {
   beforeEach(() => {
     // --show previews the exercise; keep the drill's own output out of the run
     vi.spyOn(console, "log").mockImplementation(() => {});

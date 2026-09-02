@@ -60,7 +60,7 @@ export function resolveExercise(
 const GENERATOR_WEIGHT = 2;
 
 /**
- * Language mix soft-cap (spec E1): with no --lang, nothing else stops one concrete
+ * Language mix soft-cap: with no --lang, nothing else stops one concrete
  * language from dominating a stretch of draws (a pack can skew the pool hard). A
  * language holding at least LANGUAGE_CAP_THRESHOLD of the caller's last
  * LANGUAGE_CAP_WINDOW sessions has its candidates' weight multiplied by

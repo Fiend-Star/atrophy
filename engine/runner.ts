@@ -6,8 +6,9 @@ export interface RunResult {
   exitCode: number | null;
   timedOut: boolean;
   durationMs: number;
-  /** stdout hit MAX_OUTPUT_BYTES and further output was dropped - a mismatch downstream
-   *  may be the cap, not the answer. */
+  /** stdout reached MAX_OUTPUT_BYTES: whatever arrived after that was dropped (nothing is
+   *  lost when the output ends exactly at the cap) - a mismatch downstream may be the cap,
+   *  not the answer. */
   truncated: boolean;
 }
 

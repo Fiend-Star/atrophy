@@ -949,7 +949,7 @@ describe("solutionFileName", () => {
 });
 
 describe("grade - bounded failure payloads: a huge *return value* cannot zero earned cases", () => {
-  // The hardening bounded thrown messages in every language and values in Java only.
+  // Thrown messages are bounded in every language, and Harness.java bounds values too.
   // A wrong answer that is merely enormous (a 300KB string where a number was expected)
   // is the same hazard on the python/node paths: unbounded, it lands in the failure's
   // `actual`, blows the 256KB cap before the marker, and voids the cases that passed.

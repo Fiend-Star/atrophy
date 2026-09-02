@@ -354,7 +354,7 @@ async function gradeSql(ex: SqlWriteExercise, dir: string): Promise<GradeResult>
  */
 function cappedHarnessError(): string {
   // "reached", not "exceeded": `truncated` is true once stdout.length >= the cap, which
-  // includes the exact-boundary case where nothing was actually dropped (F2) - "exceeded"
+  // includes the exact-boundary case where nothing was actually dropped - "exceeded"
   // would be a false claim there.
   return `output reached the ${RUNNER_OUTPUT_CAP / 1024}KB cap before the result marker - the failure diff may be too large; not necessarily an exercise bug`;
 }
@@ -497,7 +497,7 @@ export function shellCaseFailure(r: ShellCaseReport): string | undefined {
 }
 
 /**
- * The P2 signature: which `PINNED_TOOLS` members bash reported missing. A drill may
+ * The broken-toolchain signature: which `PINNED_TOOLS` members bash reported missing. A drill may
  * assume every one of them, so a `command not found` naming one is a broken toolchain -
  * never evidence about the user. A name outside the set is an ordinary failure: the
  * answer reached for a tool the contract does not provide.
@@ -631,11 +631,11 @@ export async function gradeShell(
       // with no shell in between, and the script itself is named relative to its own
       // directory so `$0` reads the same on every host.
       //
-      // P13, spec-accepted: the runner resolves on `close`, so a backgrounded child of
+      // The runner resolves on `close`, so a backgrounded child of
       // the user's own script keeps holding the stdout pipe after the SIGKILL and the
       // call can outlast testTimeoutMs by however long that child lives. The budget
       // bounds the drill's own commands, not an orphan; shipped content may not
-      // background at all (T5 greps for `&`/`disown`/`nohup`).
+      // background at all (bank-integrity's shell-script lint greps for `&`/`disown`/`nohup`).
       result = await run(bash, [scriptName, ...(c.args ?? [])], {
         cwd: caseDir,
         timeoutMs: ex.testTimeoutMs,
@@ -680,7 +680,7 @@ export async function gradeShell(
     }
 
     // Only a case that failed is worth asking *why*. A broken toolchain fails its cases
-    // by construction - P2's shape is the tools gone, no output and exit 0 - so gating
+    // by construction - the broken-toolchain shape is the tools gone, no output and exit 0 - so gating
     // here costs the signature nothing, while consulting it on a passing case would void
     // a correct answer over stderr the drill never graded (a script that happens to run
     // `PATH=/nonexistent sort` as a side effect still answered the question).

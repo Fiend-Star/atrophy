@@ -170,13 +170,13 @@ function fixtureSnapshot(fixture: string): string {
  * sql needs no toolchain gate the way java does - better-sqlite3 is a dependency of the
  * CLI itself, so any machine that can run atrophy can validate sql content, and every
  * pack validated through ATROPHY_BANK is held to these gates as well. What keeps them
- * from passing on an empty loop is the presence arm below (spec §3.5).
+ * from passing on an empty loop is the presence arm below.
  */
 describe("bank integrity - sql", () => {
   const sqlWrites = bank.filter(isSqlWrite);
 
   it("the built-in bank ships sql write content", () => {
-    // spec §3.5's third vacuity arm, beside the two java ones above. Every gate in this
+    // The third vacuity arm, beside the two java ones above. Every gate in this
     // describe iterates sqlWrites, so a bank that lost its sql would turn all of them
     // green by iterating nothing. A pack pointed at by ATROPHY_BANK may legitimately ship
     // no sql at all, so only the built-in bank is held to this.
@@ -252,7 +252,7 @@ describe("bank integrity - sql", () => {
 
   it("the hardcoded-literal cheese cannot pass every case", async () => {
     for (const ex of sqlWrites) {
-      // spec §2.4(c): the cheese is rebuilt from the FIRST case that expects any rows.
+      // The cheese is rebuilt from the FIRST case that expects any rows.
       // A bank where no case does is already impossible - the gate above rejects it.
       const sourceIndex = ex.cases.findIndex((c) => c.expectedRows.length > 0);
       const source = ex.cases[sourceIndex];
@@ -316,9 +316,9 @@ describe("bank integrity - sql", () => {
  * - A bash reference is the hardest artifact in a shell drill to escape into JSON: one
  *   sed or awk program with backslashes and the field is unreviewable. A `.sh` file is
  *   byte-exact, runs under `bash <file>` by hand, and mounts straight into the
- *   dual-toolchain container gate the content spec requires of every shell wave.
+ *   dual-toolchain container gate shell content is run through before it ships.
  * - `loadBank` walks for `*.json` only, so nothing in the program can pick a reference
- *   up by accident. It exists for these gates and for the wave gates.
+ *   up by accident. It exists for these gates and for that container gate.
  */
 const REFERENCE_SUFFIX = ".reference.sh";
 

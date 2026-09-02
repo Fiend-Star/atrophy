@@ -130,7 +130,7 @@ export class Store {
 
   /**
    * Languages of the last n sessions across all axes, most-recent-first - the
-   * window the language-mix soft-cap reads (spec E1). "any" rows (language-
+   * window the language-mix soft-cap reads. "any" rows (language-
    * agnostic drills) are included; selection knows not to penalize those.
    */
   recentSessionLanguages(n: number): (Language | "any")[] {

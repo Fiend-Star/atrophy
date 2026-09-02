@@ -260,7 +260,7 @@ export async function drillOnce(
       language,
       allowedLanguages: pool.allowed,
     };
-    // Language mix soft-cap (spec E1): only when the user is not steering with
+    // Language mix soft-cap: only when the user is not steering with
     // --lang. Baseline opts out too - it forces per-axis coverage, and its own
     // first drills would otherwise skew the languages of its later ones.
     if (opts.languageMix !== false && language === undefined) {
@@ -554,7 +554,7 @@ function cliVersion(): string {
 
 // --- command actions -------------------------------------------------------
 // One exported function per command, so tests can drive a command's real body
-// without spawning a process (spec E2).
+// without spawning a process.
 
 export async function drillAction(flags: DrillFlags): Promise<void> {
   const store = new Store();
